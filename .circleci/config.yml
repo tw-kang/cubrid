@@ -25,11 +25,14 @@ test_defaults: &test_defaults
             rm -rf cubrid-testcases/$TEST_SUITE/_05_plcsql
             rm -rf cubrid-testcases/$TEST_SUITE/_35_fig_cake/plcsql
             glob_path="cubrid-testcases/$TEST_SUITE/_*"
+          elif [ $TEST_SUITE = "shell" ] 
+          then
+            glob_path="cubrid-testcases-private-ex/$TEST_SUITE/_*"
           else
             glob_path="cubrid-testcases/$TEST_SUITE/_*"
           fi
           circleci tests glob $glob_path | circleci tests split | tee tc.list
-          find cubrid-testcases/$TEST_SUITE/_* -maxdepth 0 -type d -print0 | grep -vzZ -f tc.list | xargs -0 rm -rf
+          find $glo_path -maxdepth 0 -type d -print0 | grep -vzZ -f tc.list | xargs -0 rm -rf
           /entrypoint.sh test
     - run:
         name: Collect Logs
@@ -99,6 +102,14 @@ jobs:
     resource_class: medium
     <<: *test_defaults
 
+  test_shell:
+    <<: *defaults
+    environment:
+      TEST_SUITE: shell
+      GH_TOKEN: $GH_TOKEN
+    resource_class: medium
+    <<: *test_defaults
+
   build-windows:
     machine:
       image: 'windows-server-2019'
@@ -146,6 +157,10 @@ workflows:
           requires:
             - build
       - test_plcsql:
+          requires:
+            - build
+      - test_shell:
+          type: approval
           requires:
             - build
 
