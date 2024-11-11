@@ -32,7 +32,7 @@ test_defaults: &test_defaults
             glob_path="cubrid-testcases/$TEST_SUITE/_*"
           fi
           circleci tests glob $glob_path | circleci tests split | tee tc.list
-          find $glo_path -maxdepth 0 -type d -print0 | grep -vzZ -f tc.list | xargs -0 rm -rf
+          find $glob_path -maxdepth 0 -type d -print0 | grep -vzZ -f tc.list | xargs -0 rm -rf
           /entrypoint.sh test
     - run:
         name: Collect Logs
@@ -163,9 +163,12 @@ workflows:
 #      - test_plcsql:
 #          requires:
 #            - build
-      - test_shell:
+      - hold:
           type: approval
           requires:
             - build
+      - test_shell:
+          requires:
+            - hold
 
 #      - build-windows
