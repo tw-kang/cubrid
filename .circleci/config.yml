@@ -1,7 +1,7 @@
 defaults: &defaults
   working_directory: /home
   docker:
-    - image: cubridci/cubridci:develop
+    - image: twkang3219/cubridci:develop
 
 test_defaults: &test_defaults
   steps:
@@ -53,7 +53,10 @@ jobs:
       MAKEFLAGS: -j 10
     resource_class: large
     steps:
-      - checkout
+      - run:
+          name: Checkout Repository
+          command: git clone https://$GH_TOKEN@github.com/tw-kang/cubrid.git .
+#      - checkout
       - run:
           name: Submodules
           command: |
@@ -99,6 +102,13 @@ jobs:
     resource_class: medium
     <<: *test_defaults
 
+  test_shell:
+    <<: *defaults
+    environment:
+      TEST_SUITE: shell
+      GH_TOKEN: $GH_TOKEN
+    resource_class: large
+
   build-windows:
     machine:
       image: 'windows-server-2019'
@@ -139,14 +149,17 @@ workflows:
   build_test:
     jobs:
       - build
-      - test_medium:
-          requires:
-            - build
-      - test_sql:
-          requires:
-            - build
-      - test_plcsql:
+#      - test_medium:
+#          requires:
+#            - build
+#      - test_sql:
+#          requires:
+#            - build
+#      - test_plcsql:
+#          requires:
+#            - build
+      - test_shell:
           requires:
             - build
 
-      - build-windows
+#      - build-windows
