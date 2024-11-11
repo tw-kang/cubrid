@@ -1,4 +1,4 @@
-name: Manual Trigger
+name: Comment trigger
 
 on:
   issue_comment:
@@ -10,7 +10,7 @@ jobs:
     if: ${{ github.event.issue.pull_request }}
     runs-on: ubuntu-latest
     steps:
-        env:
-          CIRCLECI_TOKEN: ${{ secrets.CIRCLECI_TOKEN }}
-        run: | 
-          echo "/run test"
+      env:
+        CIRCLECI_TOKEN: ${{ secrets.CIRCLECI_TOKEN }}
+      run: | 
+        echo "/run test"
