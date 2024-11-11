@@ -6,11 +6,11 @@ on:
 
 jobs:
   run_shell:
-    name: run shell test on circleci
+    name: run shell test on CircleCI
     if: ${{ github.event.issue.pull_request }}
     runs-on: ubuntu-latest
     steps:
-      env:
-        CIRCLECI_TOKEN: ${{ secrets.CIRCLECI_TOKEN }}
-      run: | 
-        echo "/run test"
+      - name: Run CircleCI Shell Test
+        env:
+          CIRCLECI_TOKEN: ${{ secrets.CIRCLECI_TOKEN }}
+        run: echo "/run test"
