@@ -104,10 +104,24 @@ jobs:
 
   test_shell:
     <<: *defaults
+    parameters:
+      enable_shell_test:
+        type: boolean
+        default: false
     environment:
       TEST_SUITE: shell
       GH_TOKEN: $GH_TOKEN
     resource_class: large
+    steps:
+      - run:
+          name: Conditional Shell Test
+          command: |
+            if [ "<< parameters.enable_shell_test >>" == "true" ]; then
+              echo "Running shell tests..."
+              ./run_shell_tests.sh  # 실제 테스트 명령어로 교체
+            else
+              echo "Skipping shell tests."
+            fi
 
   build-windows:
     machine:
