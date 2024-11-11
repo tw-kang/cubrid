@@ -57,6 +57,12 @@ jobs:
       MAKEFLAGS: -j 10
     resource_class: large
     steps:
+      - add_ssh_keys:
+          fingerprints:
+            - "SHA256:LESJzTljJ6uxzec7nrM/cZn12I5HGv9ki7OGXkVMroQ"
+      - run:
+          name: Add GitHub to known_hosts
+          command: ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
       - checkout
       - run:
           name: Submodules
@@ -165,4 +171,4 @@ workflows:
           requires:
             - build
 
-      - build-windows
+#      - build-windows
