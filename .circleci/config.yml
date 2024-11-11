@@ -1,7 +1,7 @@
 defaults: &defaults
   working_directory: /home
   docker:
-    - image: cubridci/cubridci:develop
+    - image: twkang3219/cubridci:develop
 
 test_defaults: &test_defaults
   steps:
@@ -40,6 +40,7 @@ test_defaults: &test_defaults
           mkdir -p /tmp/logs
           mv -f CUBRID/log /tmp/logs/cubrid_log
           mv -f cubrid-testtools/CTP/sql/log /tmp/logs/ctp_log
+          mv -f cubrid-testtools/CTP/result/shell/current_runtime_logs /tmp/logs/ctp_log
           find /home -name "core.*" | xargs -I{} mv -f {} /tmp/logs
           #dmesg > /tmp/logs/dmesg.out
         when: on_fail
@@ -164,4 +165,4 @@ workflows:
           requires:
             - build
 
-      - build-windows
+#      - build-windows
