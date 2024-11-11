@@ -161,6 +161,10 @@ jobs:
 workflows:
   version: 2
   build_test:
+    parameters:
+      enable_shell_test:
+        type: boolean
+        default: false
     jobs:
       - build
 #      - test_medium:
@@ -175,5 +179,6 @@ workflows:
       - test_shell:
           requires:
             - build
+          enable_shell_test: << pipeline.parameters.enable_shell_test >>
 
 #      - build-windows
