@@ -165,4 +165,4 @@ workflows:
           requires:
             - build
 
-#      - build-windows
+      - build-windows
