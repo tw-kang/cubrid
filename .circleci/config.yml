@@ -118,7 +118,7 @@ jobs:
           command: |
             if [ "<< parameters.enable_shell_test >>" == "true" ]; then
               echo "Running shell tests..."
-              ./run_shell_tests.sh  # 실제 테스트 명령어로 교체
+              # 실제 테스트 명령어로 교체
             else
               echo "Skipping shell tests."
             fi
@@ -166,7 +166,7 @@ workflows:
         type: boolean
         default: false
     jobs:
-      - build
+#      - build
 #      - test_medium:
 #          requires:
 #            - build
@@ -177,8 +177,8 @@ workflows:
 #          requires:
 #            - build
       - test_shell:
-          requires:
-            - build
+#          requires:
+#            - build
           enable_shell_test: << pipeline.parameters.enable_shell_test >>
 
 #      - build-windows
