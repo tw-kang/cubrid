@@ -175,6 +175,5 @@ workflows:
       - test_shell:
 #          requires:
 #            - build
-          run_shell_test: true
 
 #      - build-windows
