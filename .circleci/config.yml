@@ -103,22 +103,29 @@ jobs:
     <<: *test_defaults
 
   test_shell:
-    <<: *defaults
+    docker:
+      - image: twkang3219/ctp_image_shell:develop
     parameters:
       run_shell_test:
         type: boolean
         default: false
     environment:
       TEST_SUITE: shell
-      GH_TOKEN: $GH_TOKEN
+      GH_TOKEN: $GITHUB_TOKEN
     resource_class: large
     steps:
+      - attach_workspace:
+          at: /home/shell
+      - run:
+          name: Setup Environment
+          command: |
+            /entrypoint.sh worker
       - run:
           name: Conditional Shell Test
           command: |
             if [ "<< parameters.run_shell_test >>" == "true" ]; then
               echo "Running shell tests..."
-              # 실제 테스트 명령어로 교체
+              /entrypoint.sh test
             else
               echo "Skipping shell tests."
             fi
@@ -163,15 +170,15 @@ workflows:
   build_test:
     jobs:
       - build
-#      - test_medium:
-#          requires:
-#            - build
-#      - test_sql:
-#          requires:
-#            - build
-#      - test_plcsql:
-#          requires:
-#            - build
+      - test_medium:
+          requires:
+            - build
+      - test_sql:
+         requires:
+            - build
+      - test_plcsql:
+          requires:
+            - build
       - test_shell:
           requires:
             - build
