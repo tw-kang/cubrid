@@ -1213,6 +1213,8 @@ qmgr_process_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl_tree, char *xasl_s
 	}
     }
 
+  set_xasl_unpack_info_ptr (thread_p, xasl_buf_info);
+
   query_p->includes_tde_class = XASL_IS_FLAGED (xasl_p, XASL_INCLUDES_TDE_CLASS);
 
   tde_er_log ("qmgr_process_query(): includes_tde_class = %d\n", query_p->includes_tde_class);
@@ -1243,7 +1245,7 @@ qmgr_process_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl_tree, char *xasl_s
 
   /* allocate new QFILE_LIST_ID to be returned as the result and copy from the query result; the caller is responsible
    * to free this */
-  list_id = qfile_clone_list_id (query_p->list_id, false);
+  list_id = qfile_clone_list_id (query_p->list_id, false, QFILE_SKIP_DEPENDENT);
   if (list_id == NULL)
     {
       goto exit_on_error;
@@ -1541,7 +1543,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p, const XASL_ID * xasl_id_p, QUERY_I
     {
       /* allocate new QFILE_LIST_ID to be stored in the query entry cloning from the QFILE_LIST_ID of the found list
        * cache entry */
-      query_p->list_id = qfile_clone_list_id (&list_cache_entry_p->list_id, false);
+      query_p->list_id = qfile_clone_list_id (&list_cache_entry_p->list_id, false, QFILE_PROHIBIT_DEPENDENT);
       if (query_p->list_id == NULL)
 	{
 	  goto exit_on_error;
@@ -1550,7 +1552,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p, const XASL_ID * xasl_id_p, QUERY_I
 
       /* allocate new QFILE_LIST_ID to be returned as the result and copy from the query result; the caller is
        * responsible to free this */
-      list_id_p = qfile_clone_list_id (query_p->list_id, false);
+      list_id_p = qfile_clone_list_id (query_p->list_id, false, QFILE_PROHIBIT_DEPENDENT);
       if (list_id_p == NULL)
 	{
 	  goto exit_on_error;	/* maybe, memory allocation error */
