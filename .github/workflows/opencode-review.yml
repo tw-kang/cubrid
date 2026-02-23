@@ -37,4 +37,3 @@ jobs:
             - Check for code quality issues
             - Look for potential bugs
             - Suggest improvements
-# trigger
