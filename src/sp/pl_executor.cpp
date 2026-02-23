@@ -36,6 +36,7 @@
 #include "sp_code.hpp"
 #include "xserver_interface.h"
 
+// trigger test
 // XXX: SHOULD BE THE LAST INCLUDE HEADER
 #include "memory_wrapper.hpp"
 namespace cubpl
