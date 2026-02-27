@@ -41,7 +41,7 @@ jobs:
           app-id: ${{ secrets.TC_APP_ID }}
           private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
           repositories: ${{ matrix.tc-repo }}
-          owner: CUBRID
+          owner: tw-kang
 
       - name: Mask token
         env:
@@ -65,7 +65,7 @@ jobs:
           BRANCH_NAME="tc/pr-${PR_NUMBER}"
 
           # Check if TC branch exists
-          if ! gh api "repos/CUBRID/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
+          if ! gh api "repos/tw-kang/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
             echo "::notice::Branch '${BRANCH_NAME}' does not exist in ${TC_REPO}. Nothing to merge."
             exit 0
           fi
@@ -75,7 +75,7 @@ jobs:
 
           # Clone TC repo develop (treeless for speed)
           git clone --filter=blob:none \
-            "https://x-access-token:${APP_TOKEN}@github.com/CUBRID/${TC_REPO}.git" \
+            "https://x-access-token:${APP_TOKEN}@github.com/tw-kang/${TC_REPO}.git" \
             tc-repo
           cd tc-repo
 
@@ -111,8 +111,8 @@ jobs:
           set -euo pipefail
           BRANCH_NAME="tc/pr-${PR_NUMBER}"
 
-          if gh api "repos/CUBRID/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
-            gh api "repos/CUBRID/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" --method DELETE
+          if gh api "repos/tw-kang/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
+            gh api "repos/tw-kang/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" --method DELETE
             echo "::notice::Deleted '${BRANCH_NAME}' from ${TC_REPO}"
           else
             echo "::notice::Branch '${BRANCH_NAME}' not found in ${TC_REPO}. Already deleted."

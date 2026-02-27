@@ -84,7 +84,7 @@ jobs:
           app-id: ${{ secrets.TC_APP_ID }}
           private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
           repositories: ${{ matrix.tc-repo }}
-          owner: CUBRID
+          owner: tw-kang
 
       - name: Mask token
         env:
@@ -103,16 +103,16 @@ jobs:
           BRANCH_NAME="tc/pr-${PR_NUMBER}"
 
           # Check if branch already exists — skip if so
-          if gh api "repos/CUBRID/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
+          if gh api "repos/tw-kang/${TC_REPO}/git/refs/heads/${BRANCH_NAME}" > /dev/null 2>&1; then
             echo "::notice::Branch '${BRANCH_NAME}' already exists in ${TC_REPO}. Skipping."
             exit 0
           fi
 
           # Get develop HEAD SHA
-          DEVELOP_SHA=$(gh api "repos/CUBRID/${TC_REPO}/git/refs/heads/develop" --jq '.object.sha')
+          DEVELOP_SHA=$(gh api "repos/tw-kang/${TC_REPO}/git/refs/heads/develop" --jq '.object.sha')
 
           # Create branch
-          gh api "repos/CUBRID/${TC_REPO}/git/refs" \
+          gh api "repos/tw-kang/${TC_REPO}/git/refs" \
             --method POST \
             --field ref="refs/heads/${BRANCH_NAME}" \
             --field sha="${DEVELOP_SHA}"
@@ -161,7 +161,7 @@ jobs:
           app-id: ${{ secrets.TC_APP_ID }}
           private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
           repositories: ${{ matrix.tc-repo }}
-          owner: CUBRID
+          owner: tw-kang
 
       - name: Mask token
         env:
@@ -184,7 +184,7 @@ jobs:
 
           # Clone TC repo (treeless for speed — we need commit history)
           git clone --filter=blob:none \
-            "https://x-access-token:${APP_TOKEN}@github.com/CUBRID/${TC_REPO}.git" \
+            "https://x-access-token:${APP_TOKEN}@github.com/tw-kang/${TC_REPO}.git" \
             tc-repo
           cd tc-repo
 
