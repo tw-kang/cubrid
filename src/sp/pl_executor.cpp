@@ -726,7 +726,11 @@ exit:
 			}
 		    }
 
-		  xqmgr_end_query (&thread_ref, qid);
+		  int end_error = xqmgr_end_query (&thread_ref, qid);
+		  if (end_error != NO_ERROR)
+		    {
+		      error = end_error;
+		    }
 		}
 	    }
 	}
