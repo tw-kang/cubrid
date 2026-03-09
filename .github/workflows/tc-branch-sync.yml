@@ -126,6 +126,7 @@ jobs:
             /tmp/tc-init-${TC_REPO} 2>/dev/null || true
           if [ -d "/tmp/tc-init-${TC_REPO}/.git" ]; then
             cd /tmp/tc-init-${TC_REPO}
+<<<<<<< HEAD
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit --allow-empty -m "chore: Initialize TC branch for PR #${PR_NUMBER}"
@@ -133,6 +134,15 @@ jobs:
             echo "::notice::Added initial commit to ${BRANCH_NAME}"
           fi
           
+=======
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: Initialize TC branch for PR #${PR_NUMBER}"
+            git push origin "${BRANCH_NAME}" --force
+            echo "::notice::Added initial commit to ${BRANCH_NAME}"
+          fi
+
+>>>>>>> twkang/cubridqa-1320_re
           gh api "repos/tw-kang/${TC_REPO}/git/refs" \
             --method POST \
             --field ref="refs/heads/${BRANCH_NAME}" \
