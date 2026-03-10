@@ -1,1 +1,2 @@
-add test01
+add test01 
+revision on cubrid-testcases
