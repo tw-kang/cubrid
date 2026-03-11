@@ -2,7 +2,7 @@
   {
     "file": "src/connection/coordinator.cpp",
     "line": 74,
-    "issue": "assert_release(false)는 런타임 강제 종료를 유발함. 초기화 실패는 graceful degradation 필요.",
+    "issue": "assert_release는 런타임 종료 위험. 초기화 실패는 graceful degradation 필요.",
     "suggestion": "if (!m_controller.open (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"controller open failed\");\n    m_status = status::FAILED;\n    return;\n}"
   },
   {
@@ -18,6 +18,42 @@
     "suggestion": "if (!this->eventfd_register (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd register failed\");\n    m_status = status::FAILED;\n    return;\n}"
   },
   {
+    "file": "src/connection/coordinator.cpp",
+    "line": 106,
+    "issue": "timerfd_registration 실패 시 assert_release. graceful handling 필요.",
+    "suggestion": "if (!this->timerfd_registration (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"timer registration failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 273,
+    "issue": "worker notify 실패 시 assert_release. 런타임 종료 위험.",
+    "suggestion": "if (!worker->notify (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"worker notify failed\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 959,
+    "issue": "NEW_CLIENT 처리 중 notify 실패 시 assert_release. 연결 끊김 위험.",
+    "suggestion": "if (!notify (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"notify failed\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1096,
+    "issue": "알 수 없는 메시지 타입에서 assert_release. graceful skip 필요.",
+    "suggestion": "default:\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown message type\");\n    return;"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1208,
+    "issue": "thread_entry claim 실패 시 assert_release. 메모리 부족 가능성.",
+    "suggestion": "if (!m_entry) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return ER_FAILED;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1253,
+    "issue": "epoll_wait 실패 시 assert_release. 일시적 오류 가능.",
+    "suggestion": "if (nfds < 0) {\n    if (errno != EINTR) {\n        er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"epoll_wait failed\");\n    }\n    return;\n}"
+  },
+  {
     "file": "src/connection/master_connector.cpp",
     "line": 80,
     "issue": "eventfd 생성 실패 시 assert_release(false) 사용. 초기화 오류는 graceful handling 필요.",
@@ -25,15 +61,57 @@
   },
   {
     "file": "src/connection/master_connector.cpp",
-    "line": 83,
+    "line": 86,
     "issue": "new context() 후 nullptr 체크는 무의미함. C++ new는 실패 시 std::bad_alloc throw.",
     "suggestion": "ctx = new (std::nothrow) context ();\nif (!ctx) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 92,
+    "issue": "context 할당 실패 시 assert_release. 메모리 부족은 graceful handling 가능.",
+    "suggestion": "if (!ctx) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return;\n}"
   },
   {
     "file": "src/connection/master_connector.cpp",
     "line": 98,
     "issue": "add_descriptor 실패 시 ctx->m_conn 메모리 누수. delete 후 assert_release.",
     "suggestion": "if (!m_events.add_descriptor (...)) {\n    delete ctx->m_conn;\n    delete ctx;\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"add_descriptor failed\");\n    return;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 127,
+    "issue": "stop()에서 write 실패 시 assert_release. shutdown 중 오류는 무시 가능.",
+    "suggestion": "if (write (m_eventfd, ...) < 0) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"write failed\");\n    // continue shutdown\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 274,
+    "issue": "context 할당 실패 시 assert_release. nullptr 반환 후 caller가 처리.",
+    "suggestion": "ctx = new (std::nothrow) context;\nif (!ctx) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return nullptr;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 558,
+    "issue": "assert_release(size <= BODY_SIZE). 런타임 검증은 graceful handling 필요.",
+    "suggestion": "if (size > BODY_SIZE) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"packet too large\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1033,
+    "issue": "default case에서 assert_release. unknown state는 error logging 필요.",
+    "suggestion": "default:\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown state\");\n    return false;"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1166,
+    "issue": "transmission handler default case assert_release. graceful error return 필요.",
+    "suggestion": "default:\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown transmission state\");\n    return false;"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1273,
+    "issue": "epoll_wait 실패 시 assert_release. errno 확인 후 retry 필요.",
+    "suggestion": "if (nfds < 0) {\n    if (errno != EINTR) {\n        er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"epoll_wait failed\");\n    }\n    continue;\n}"
   },
   {
     "file": "src/connection/connection_worker.cpp",
@@ -48,16 +126,130 @@
     "suggestion": "if (!this->eventfd_register (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd register failed\");\n    m_status = status::FAILED;\n    return;\n}"
   },
   {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 118,
+    "issue": "timerfd_registration 실패 시 assert_release. graceful handling 필요.",
+    "suggestion": "if (!this->timerfd_registration (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"timer registration failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 310,
+    "issue": "purge_stale_contexts에서 notify 실패 시 assert_release. cleanup 중 오류.",
+    "suggestion": "if (!notify (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"notify failed\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 397,
+    "issue": "ctx->m_conn nullptr check에 assert_release. early return 필요.",
+    "suggestion": "if (!ctx->m_conn) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"null connection\");\n    return;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 588,
+    "issue": "hibernate에서 timer stop 실패 시 assert_release. graceful continue 필요.",
+    "suggestion": "if (!stop (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"timer stop failed\");\n    // continue hibernate\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1066,
+    "issue": "new_client 처리 중 timer start 실패 시 assert_release.",
+    "suggestion": "if (!start (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"timer start failed\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1116,
+    "issue": "handoff_client_1에서 assert_release. connection migration 실패 처리 필요.",
+    "suggestion": "if (!handoff (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"handoff failed\");\n    return false;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1332,
+    "issue": "알 수 없는 메시지 타입에서 assert_release. skip하고 continue 필요.",
+    "suggestion": "default:\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown message\");\n    return;"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1681,
+    "issue": "unknown packet state에서 assert_release. error status 반환 필요.",
+    "suggestion": "default:\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown packet state\");\n    return result::Error;"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1955,
+    "issue": "thread_entry claim 실패 시 assert_release. 메모리 부족 가능성.",
+    "suggestion": "if (!entry) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return ER_FAILED;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 2019,
+    "issue": "epoll_wait 실패 시 assert_release. errno 확인 후 retry.",
+    "suggestion": "if (nfds < 0) {\n    if (errno != EINTR) {\n        er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"epoll_wait failed\");\n    }\n    continue;\n}"
+  },
+  {
     "file": "src/connection/connection_pool.cpp",
     "line": 117,
     "issue": "notify() 실패 시 assert_release(false). graceful error handling 필요.",
     "suggestion": "if (!m_coordinator->notify ()) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"coordinator notify failed\");\n    return;\n}"
   },
   {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 292,
+    "issue": "warmup에서 enqueue 실패 시 assert_release. initialization 실패 처리.",
+    "suggestion": "if (!enqueue (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"enqueue failed\");\n    return ER_FAILED;\n}"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 312,
+    "issue": "finalize에서 notify 실패 시 assert_release. shutdown 중 오류 무시.",
+    "suggestion": "if (!notify (...)) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"notify failed\");\n    // continue finalize\n}"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 359,
+    "issue": "start에서 notify 실패 시 assert_release. startup 실패 처리.",
+    "suggestion": "if (!notify (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"notify failed\");\n    return ER_FAILED;\n}"
+  },
+  {
     "file": "src/base/epoll.cpp",
     "line": 42,
     "issue": "epoll_create1 실패 시 assert_release(false). 에러 코드 반환 필요.",
     "suggestion": "epoll::epoll () : m_epoll (-1)\n{\n    m_epoll = ::epoll_create1 (EPOLL_CLOEXEC);\n    if (m_epoll == -1)\n      {\n        er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"epoll_create1 failed\");\n      }\n}"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 144,
+    "issue": "assert_release() 사용. padding 값 검증 실패는 graceful handling 가능.",
+    "suggestion": "if (padding < 0 || padding >= 8)\n  {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"invalid padding\");\n    return result::Error;\n  }"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 183,
+    "issue": "zero-length frame에서 assert_release. protocol error graceful handling.",
+    "suggestion": "if (m_size == 0) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"zero-length frame\");\n    return result::Error;\n}"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 225,
+    "issue": "parse_size에서 zero-length frame assert_release.",
+    "suggestion": "if (m_size == 0) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"zero-length frame\");\n    return result::Error;\n}"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 464,
+    "issue": "drain에서 unknown state assert_release.",
+    "suggestion": "default:\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown drain state\");\n    return result::Error;"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 485,
+    "issue": "drain switch에서 unknown result assert_release.",
+    "suggestion": "default:\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"unknown result\");\n    return result::Error;"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 512,
+    "issue": "release에서 memory not found assert_release. double-free 방지.",
+    "suggestion": "if (!found) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"memory not found\");\n    return;\n}"
   },
   {
     "file": "src/base/hardware_topology.cpp",
@@ -69,24 +261,84 @@
     "file": "src/base/ifsys.cpp",
     "line": 197,
     "issue": "malloc() 직접 사용. CUBRID는 db_private_alloc 또는 malloc 후 free_and_init 패턴 사용.",
-    "suggestion": "buf = (char *) db_private_alloc (thread_p, cap);\nif (!buf)\n  {\n    return NULL;\n  }"
+    "suggestion": "buf = (char *) db_private_alloc (NULL, cap);\nif (!buf)\n  {\n    return NULL;\n  }"
   },
   {
-    "file": "src/connection/server_support.c",
-    "line": 86,
-    "issue": "memory_wrapper.hpp는 헤더가 아닌 cpp 파일에서만 include 가능. 다른 헤더에 노출되지 않도록 주의.",
-    "suggestion": "// memory_wrapper.hpp는 반드시 cpp 파일의 마지막 include여야 함\n// 헤더 파일에서는 memory_cwrapper.h 사용"
+    "file": "src/base/ifsys.cpp",
+    "line": 328,
+    "issue": "realloc() 직접 사용. db_private_realloc 사용 필요.",
+    "suggestion": "nv = (struct qirq *) db_private_realloc (NULL, a->v, ncap * sizeof (*nv));\nif (!nv)\n  {\n    return;\n  }"
   },
   {
-    "file": "src/connection/connection_sr.c",
+    "file": "src/base/ifsys.cpp",
+    "line": 477,
+    "issue": "free(mask) 사용. free_and_init() 사용 필요.",
+    "suggestion": "free_and_init (mask);"
+  },
+  {
+    "file": "src/base/ifsys.cpp",
+    "line": 507,
+    "issue": "free(mask) 사용. free_and_init() 사용 필요.",
+    "suggestion": "free_and_init (mask);"
+  },
+  {
+    "file": "src/base/ifsys.cpp",
+    "line": 528,
+    "issue": "free(mask) 사용. free_and_init() 사용 필요.",
+    "suggestion": "free_and_init (mask);"
+  },
+  {
+    "file": "src/connection/connection_cl.c",
+    "line": 64,
+    "issue": "C 파일이 C++ 헤더(filesys.hpp) 직접 include. memory_wrapper.hpp 누락.",
+    "suggestion": "// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/connection/connection_cl.c",
+    "line": 65,
+    "issue": "C++ 헤더(filesys_temp.hpp) 직접 include. memory_wrapper.hpp 누락.",
+    "suggestion": "// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/connection/heartbeat.c",
+    "line": 62,
+    "issue": "C 파일이 C++ 헤더(error_context.hpp) 직접 include. memory_wrapper.hpp 누락.",
+    "suggestion": "// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/connection/heartbeat.c",
+    "line": 67,
+    "issue": "C++ 헤더(connection_support.hpp) 직접 include. memory_wrapper.hpp 누락.",
+    "suggestion": "// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/connection/tcp.c",
     "line": 87,
-    "issue": "C++ 헤더를 C 파일에서 include. connection_worker.hpp는 C++ 전용.",
-    "suggestion": "#ifdef __cplusplus\n#include \"connection_worker.hpp\"\n#endif"
+    "issue": "memory_wrapper.hpp 뒤에 #define 코드 존재. 반드시 마지막 include여야 함.",
+    "suggestion": "#define HOST_ID_ARRAY_SIZE 32\n// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
   },
   {
-    "file": "src/connection/receiver.cpp",
-    "line": 144,
-    "issue": "assert_release() 사용. padding 값 검증 실패는 graceful handling 가능.",
-    "suggestion": "if (padding < 0 || padding >= 8)\n  {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"invalid padding\");\n    return result::Error;\n  }"
+    "file": "src/connection/host_lookup.c",
+    "line": 49,
+    "issue": "memory_wrapper.hpp 뒤에 #define 코드 존재. 마지막 include 규칙 위반.",
+    "suggestion": "#define LINE_BUF_SIZE 1024\n// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/base/system_parameter.c",
+    "line": 100,
+    "issue": "memory_wrapper.hpp 뒤에 #if/#define 코드 존재. 마지막 include 규칙 위반.",
+    "suggestion": "#if defined (SUPPRESS_STRLEN_WARNING)\n#define strlen ...\n#endif\n// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/base/perf_monitor.c",
+    "line": 102,
+    "issue": "memory_wrapper.hpp 뒤에 #define 코드 존재. 마지막 include 규칙 위반.",
+    "suggestion": "#define PSTAT_VALUE_CUSTOM(...)\n// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
+  },
+  {
+    "file": "src/base/stack_dump.c",
+    "line": 67,
+    "issue": "memory_wrapper.hpp 뒤에 #if/#define 코드 존재. 마지막 include 규칙 위반.",
+    "suggestion": "#if defined (x86_SOLARIS)\n#define FRAME_LEVEL_LIMIT 30\n#endif\n// XXX: SHOULD BE THE LAST INCLUDE HEADER\n#include \"memory_wrapper.hpp\""
   }
 ]
