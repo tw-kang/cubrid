@@ -1,0 +1,92 @@
+[
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 74,
+    "issue": "assert_release(false)는 런타임 강제 종료를 유발함. 초기화 실패는 graceful degradation 필요.",
+    "suggestion": "if (!m_controller.open (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"controller open failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 83,
+    "issue": "assert_release(false)로 인해 eventfd 생성 실패 시 서버가 강제 종료됨.",
+    "suggestion": "if (m_eventfd < 0 || m_timerfd < 0) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd/timerfd create failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 91,
+    "issue": "eventfd_register 실패 시 assert_release(false)로 런타임 종료. 에러 복구 필요.",
+    "suggestion": "if (!this->eventfd_register (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd register failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 80,
+    "issue": "eventfd 생성 실패 시 assert_release(false) 사용. 초기화 오류는 graceful handling 필요.",
+    "suggestion": "if (m_eventfd == -1) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd create failed\");\n    return;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 83,
+    "issue": "new context() 후 nullptr 체크는 무의미함. C++ new는 실패 시 std::bad_alloc throw.",
+    "suggestion": "ctx = new (std::nothrow) context ();\nif (!ctx) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);\n    return;\n}"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 98,
+    "issue": "add_descriptor 실패 시 ctx->m_conn 메모리 누수. delete 후 assert_release.",
+    "suggestion": "if (!m_events.add_descriptor (...)) {\n    delete ctx->m_conn;\n    delete ctx;\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"add_descriptor failed\");\n    return;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 96,
+    "issue": "eventfd/timerfd 생성 실패 시 assert_release(false)로 서버 종료.",
+    "suggestion": "if (m_eventfd < 0 || m_timerfd < 0) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"fd creation failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 103,
+    "issue": "eventfd_register 실패 시 assert_release 대신 에러 처리 필요.",
+    "suggestion": "if (!this->eventfd_register (...)) {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"eventfd register failed\");\n    m_status = status::FAILED;\n    return;\n}"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 117,
+    "issue": "notify() 실패 시 assert_release(false). graceful error handling 필요.",
+    "suggestion": "if (!m_coordinator->notify ()) {\n    er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"coordinator notify failed\");\n    return;\n}"
+  },
+  {
+    "file": "src/base/epoll.cpp",
+    "line": 42,
+    "issue": "epoll_create1 실패 시 assert_release(false). 에러 코드 반환 필요.",
+    "suggestion": "epoll::epoll () : m_epoll (-1)\n{\n    m_epoll = ::epoll_create1 (EPOLL_CLOEXEC);\n    if (m_epoll == -1)\n      {\n        er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"epoll_create1 failed\");\n      }\n}"
+  },
+  {
+    "file": "src/base/hardware_topology.cpp",
+    "line": 121,
+    "issue": "free(qs.v) 사용. CUBRID 규칙에 따라 free_and_init() 사용 필요.",
+    "suggestion": "free_and_init (qs.v);"
+  },
+  {
+    "file": "src/base/ifsys.cpp",
+    "line": 197,
+    "issue": "malloc() 직접 사용. CUBRID는 db_private_alloc 또는 malloc 후 free_and_init 패턴 사용.",
+    "suggestion": "buf = (char *) db_private_alloc (thread_p, cap);\nif (!buf)\n  {\n    return NULL;\n  }"
+  },
+  {
+    "file": "src/connection/server_support.c",
+    "line": 86,
+    "issue": "memory_wrapper.hpp는 헤더가 아닌 cpp 파일에서만 include 가능. 다른 헤더에 노출되지 않도록 주의.",
+    "suggestion": "// memory_wrapper.hpp는 반드시 cpp 파일의 마지막 include여야 함\n// 헤더 파일에서는 memory_cwrapper.h 사용"
+  },
+  {
+    "file": "src/connection/connection_sr.c",
+    "line": 87,
+    "issue": "C++ 헤더를 C 파일에서 include. connection_worker.hpp는 C++ 전용.",
+    "suggestion": "#ifdef __cplusplus\n#include \"connection_worker.hpp\"\n#endif"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 144,
+    "issue": "assert_release() 사용. padding 값 검증 실패는 graceful handling 가능.",
+    "suggestion": "if (padding < 0 || padding >= 8)\n  {\n    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 1, \"invalid padding\");\n    return result::Error;\n  }"
+  }
+]
