@@ -3,11 +3,417 @@
     "file": "src/connection/coordinator.cpp",
     "line": 74,
     "issue": "assert_release는 런타임 종료 위험. 초기화 실패는 graceful degradation 필요.",
-    "suggestion": "if (!m_controller.open(...)) { er_log_conn(__FILE__, __LINE__, \"failed\"); return; }"
+    "suggestion": "if (!m_controller.open (...)) {\n    er_log_conn (__FILE__, __LINE__, \"failed\");\n    throw std::runtime_error(\"error\");\n}"
   },
   {
     "file": "src/connection/coordinator.cpp",
     "line": 83,
+    "issue": "assert_release로 인한 서버 종료. 파일 디스크립터 생성 실패 시 복구 로직 필요.",
+    "suggestion": "이벤트 fd 생성 실패 시 에러 로깅 후 종료 대신 재시도 또는 graceful shutdown"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 91,
+    "issue": "timerfd 실패 시 assert_release로 서버 즉시 종료. HA 환경에서 치명적.",
+    "suggestion": "assert_release 대신 에러 코드 반환 및 상위에서 처리"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 106,
+    "issue": "timer 추가 실패 시 assert_release. 불필요한 서버 종료.",
+    "suggestion": "에러 로그만 남기고 계속 진행, 타이머 없이도 동작 가능"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 112,
+    "issue": "timer 추가 실패 시 assert_release. 불필요한 서버 종료.",
+    "suggestion": "에러 로그만 남기고 계속 진행"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 118,
+    "issue": "timer 추가 실패 시 assert_release. 불필요한 서버 종료.",
+    "suggestion": "에러 로그만 남기고 계속 진행"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 273,
+    "issue": "transfer_connection 실패 시 assert_release. 메시지 손실 가능성.",
+    "suggestion": "notify 실패 시 큐에 메시지 유지 및 재시도"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 304,
+    "issue": "scale_up 실패 시 assert_release. 스케일링 실패로 서버 종료 불필요.",
+    "suggestion": "에러 반환 후 상위에서 스케일링 중지 처리"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 324,
+    "issue": "scale_down_finish 실패 시 assert_release. 스케일링 실패로 서버 종료 불필요.",
+    "suggestion": "에러 반환 후 상위에서 처리"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 959,
+    "issue": "handle_message_queue_new_client notify 실패 시 assert_release.",
+    "suggestion": "notify 실패 시 에러 반환 및 재시도 로직"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1096,
+    "issue": "handle_message_queue unknown type assert_release. invalid message type 공격 가능성.",
+    "suggestion": "unknown type은 drop하고 로그만 남김"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1208,
+    "issue": "initialize claim_entry 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 graceful shutdown"
+  },
+  {
+    "file": "src/connection/coordinator.cpp",
+    "line": 1253,
+    "issue": "epoll wait 실패 시 assert_release. EINTR 외 에러도 종료.",
+    "suggestion": "ENOENT/EINTR 체크 후 무시 또는 로그만 남김"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 96,
+    "issue": "eventfd_create 실패 시 assert_release. 프로덕션 환경에서 서버 종료 위험.",
+    "suggestion": "예외 발생 시 constructor 실패 처리 또는 초기화 단계로 이동"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 103,
+    "issue": "eventfd_register 실패 시 assert_release. 스레드 생성 중 실패 처리 미흡.",
+    "suggestion": "worker 초기화 실패 시 worker 상태 플래그 설정 및 재시도 로직"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 118,
+    "issue": "timer 추가 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 진행"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 124,
+    "issue": "timer 추가 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 진행"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 130,
+    "issue": "timer 추가 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 진행"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 310,
+    "issue": "coordinator->notify() 실패 시 assert_release. 메시지 손실 가능성.",
+    "suggestion": "notify 실패 시 큐에 메시지 유지 및 재시도"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 397,
+    "issue": "ctx->m_conn nullptr 체크 없이 rmutex_lock. null dereference 위험.",
+    "suggestion": "if (!ctx->m_conn) { return true; } 추가"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 631,
+    "issue": "new context() 후 nullptr 체크. C++ new는 실패 시 예외 발생.",
+    "suggestion": "nullptr 체크 제거 또는 try-catch(std::bad_alloc) 추가"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 644,
+    "issue": "delete ctx, conn 순서. ctx가 conn을 소유하지 않은 경우 double-free 위험.",
+    "suggestion": "ownership 명확히 문서화 또는 RAII 적용"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1116,
+    "issue": "remove_descriptor 실패 시 assert_release. 이미 닫힌 fd 가능성.",
+    "suggestion": "ENOENT/EINTR 체크 후 무시 또는 로그만 남김"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1150,
+    "issue": "m_coordinator->notify() 실패 시 assert_release. coordinator 종료 시 deadlock.",
+    "suggestion": "shutdown 진행 중인지 확인 후 무시"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1214,
+    "issue": "handle_message_queue_takeover_client timer 시작 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 graceful 처리"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1275,
+    "issue": "handle_message_queue_awaken timer 시작 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 graceful 처리"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1328,
+    "issue": "message_type 범위 체크 assert_release. invalid message type 공격 가능성.",
+    "suggestion": "unknown type은 drop하고 로그만 남김"
+  },
+  {
+    "file": "src/connection/connection_worker.cpp",
+    "line": 1681,
+    "issue": "default case에서 assert_release. 예상치 못한 상태값 처리.",
+    "suggestion": "error 로그 후 상태 리셋 및 연결 종료"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 117,
+    "issue": "assert_release 실패. shutdown timeout 시 즉시 종료(_exit).",
+    "suggestion": "정상적인 shutdown 절차 시도 또는 에러 반환"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 204,
+    "issue": "try_to_lock_resource 1000회 실패 시 _exit(0). 데이터 손실 위험.",
+    "suggestion": "강제 종료 대신 SIGTERM 또는 에러 반환"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 292,
+    "issue": "worker 초기화 notify 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 해당 worker 재초기화"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 312,
+    "issue": "worker shutdown notify 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 종료 진행"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 333,
+    "issue": "worker shutdown timeout 시 _exit(0). 트랜잭션 손실.",
+    "suggestion": "남은 트랜잭션 확인 및 정상 종료 시도"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 359,
+    "issue": "coordinator start notify 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 재시도"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 375,
+    "issue": "coordinator shutdown notify 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 종료 진행"
+  },
+  {
+    "file": "src/connection/connection_pool.cpp",
+    "line": 395,
+    "issue": "coordinator shutdown timeout 시 _exit(0). 트랜잭션 손실.",
+    "suggestion": "남은 트랜잭션 확인 및 정상 종료 시도"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 80,
+    "issue": "eventfd 생성 실패 시 assert_release. master 연결 초기화 실패.",
+    "suggestion": "에러 반환 후 상위에서 재시도"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 88,
+    "issue": "new context() 후 nullptr 체크. C++ new는 예외 발생.",
+    "suggestion": "try-catch 추가 또는 nullptr 체크 제거"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 92,
+    "issue": "new int 후 nullptr 체크. C++ new는 예외 발생.",
+    "suggestion": "try-catch 추가 또는 nullptr 체크 제거"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 98,
+    "issue": "add_descriptor 실패 시 assert_release.",
+    "suggestion": "에러 반환 후 graceful shutdown"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 127,
+    "issue": "stop()에서 write 실패 시 assert_release.",
+    "suggestion": "EAGAIN 무시하고 break"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 140,
+    "issue": "stop()에서 write 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 종료 계속"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 234,
+    "issue": "ctx->m_conn delete. css_conn_entry가 C 구조체인 경우 메모리 해제 방식 불일치.",
+    "suggestion": "css_free_conn 사용 또는 메모리 할당 방식 통일"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 241,
+    "issue": "ctx delete. context가 C++ new로 생성된 경우 delete는 맞지만 ownership 불명확.",
+    "suggestion": "ownership 명확히 문서화 또는 RAII 적용"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 271,
+    "issue": "make_context new 실패 시 nullptr 체크. C++ new는 예외 발생.",
+    "suggestion": "try-catch 추가 또는 nullptr 체크 제거"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1033,
+    "issue": "execute() default case assert_release. 예상치 못한 상태.",
+    "suggestion": "error 로그 후 상태 리셋"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1166,
+    "issue": "handle_master_transmission default case assert_release.",
+    "suggestion": "error 로그 후 상태 리셋"
+  },
+  {
+    "file": "src/connection/master_connector.cpp",
+    "line": 1273,
+    "issue": "epoll wait 실패 시 assert_release.",
+    "suggestion": "EINTR 외 에러는 로그만 남기고 계속"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 144,
+    "issue": "assert_release(padding < 8). padding 값 검증 범위 명확히.",
+    "suggestion": ">= 0 조건 명시 또는 uint32_t 사용"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 183,
+    "issue": "m_size == 0 시 assert_release. zero-length frame 처리.",
+    "suggestion": "error 반환 및 연결 종료"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 186,
+    "issue": "new std::byte[] 후 nullptr 체크. C++ new는 예외 발생.",
+    "suggestion": "try-catch(std::bad_alloc) 또는 체크 제거"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 225,
+    "issue": "m_size == 0 시 assert_release. zero-length frame 처리.",
+    "suggestion": "error 반환 및 연결 종료"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 271,
+    "issue": "new std::byte[] 후 nullptr 체크. C++ new는 예외 발생.",
+    "suggestion": "try-catch(std::bad_alloc) 또는 체크 제거"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 464,
+    "issue": "drain() default case assert_release. unknown state 처리.",
+    "suggestion": "error 반환 및 리셋"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 485,
+    "issue": "drain() switch default assert_release. unknown result 처리.",
+    "suggestion": "error 반환"
+  },
+  {
+    "file": "src/connection/receiver.cpp",
+    "line": 512,
+    "issue": "release()에서 메모리 못찾을 시 assert_release.",
+    "suggestion": "error 로그만 남기고 return"
+  },
+  {
+    "file": "src/connection/transmitter.cpp",
+    "line": 108,
+    "issue": "bytes == 0 체크 후 PeerReset. 일부 OS에서는 정상 상황.",
+    "suggestion": "OS별로 처리 분리 또는 EAGAIN 체크 추가"
+  },
+  {
+    "file": "src/connection/buffer.hpp",
+    "line": 80,
+    "issue": "template set_data에서 size 체크 후 return false. 에러 처리 일관성.",
+    "suggestion": "예외 발생 또는 caller에 에러 코드 반환"
+  },
+  {
+    "file": "src/connection/coordinator.hpp",
+    "line": 71,
+    "issue": "m_contexts unordered_map value 타입 복잡. move semantics 미적용 시 성능 저하.",
+    "suggestion": "std::move 명시 적용"
+  },
+  {
+    "file": "src/connection/connection_context.hpp",
+    "line": 40,
+    "issue": "thread_watcher 구조체에서 mtx, cv public. encapsulation 위반.",
+    "suggestion": "private 멤버로 변경 및 accessor 메서드 제공"
+  },
+  {
+    "file": "src/connection/connection_worker.hpp",
+    "line": 232,
+    "issue": "m_has_retry 플래그 atomic 아님. race condition 위험.",
+    "suggestion": "std::atomic<bool>로 변경"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 137,
+    "issue": "assert_release(capacity % page != 0). 페이지 크기 비의존적 설계 필요.",
+    "suggestion": "자동 정렬 또는 동적 페이지 크기 계산"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 146,
+    "issue": "shm_open 실패 시 assert_release. 리소스 부족 상황 처리.",
+    "suggestion": "에러 반환 및 graceful degradation"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 151,
+    "issue": "shm_unlink 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 156,
+    "issue": "ftruncate 실패 시 assert_release.",
+    "suggestion": "에러 반환"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 165,
+    "issue": "mmap 실패 시 assert_release. 메모리 부족 상황.",
+    "suggestion": "에러 반환"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 173,
+    "issue": "mmap FIXED 실패 시 assert_release.",
+    "suggestion": "에러 반환 및 cleanup"
+  },
+  {
+    "file": "src/base/DMRB.hpp",
+    "line": 179,
+    "issue": "madvise 실패 시 assert_release.",
+    "suggestion": "에러 로그만 남기고 계속 (MADV_DONTFORK는 optional)"
+  },
+  {
+    "file": "src/base/epoll.cpp",
+    "line": 42,
+    "issue": "epoll_create1 실패 시 assert_release. fd 한도 초과 상황 처리 미흡.",
+    "suggestion": "ulimit 확인 및 graceful error 반환"
+  }
+]
     "issue": "assert_release로 인한 서버 종료. 파일 디스크립터 생성 실패 시 복구 로직 필요.",
     "suggestion": "이벤트 fd 생성 실패 시 에러 로깅 후 종료 대신 재시도 또는 graceful shutdown"
   },
