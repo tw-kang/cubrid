@@ -1,0 +1,86 @@
+# PROTOTYPE — CUBRIDQA-1503 / S2.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 질문 3개를 한 번의 dispatch로 답한다.
+#   1. ARC 러너가 job을 받아 완주하는가          -> job: hello
+#   2. rl8.10이 job container로 뜨고, 러너가 주입하는 node가 도는가  -> job: rl810
+#   3. centos:6은 예상대로 실패하는가             -> job: centos6
+#
+# 핵심 설계: rl810과 centos6 두 job은 `actions/checkout`을 부른다.
+#   checkout은 JS 액션이므로 러너가 /__e 에 붙인 node 를 실행한다.
+#   이것이 glibc 판정을 실물로 가르는 지점이다. 이 스텝이 도는지가 답이다.
+#   그래서 두 job은 스텝 구성이 같아야 한다. 이미지만 다르다.
+#
+# 두는 곳: fork의 *기본 브랜치* 여야 한다. workflow_dispatch 는 기본 브랜치의
+#   워크플로만 실행한다. 지금 fork 기본 브랜치는 develop 이 아니라 cbrd-26557 이다.
+#
+# 실행: gh workflow run poc-s2.yml --repo tw-kang/cubrid
+
+name: poc-s2
+
+on:
+  workflow_dispatch:
+
+# self-hosted를 태우는 워크플로는 최소 권한으로 둔다.
+permissions:
+  contents: read
+
+jobs:
+  hello:
+    name: 1. 러너가 산다
+    runs-on: cubridqa-1503-poc
+    steps:
+      - name: 러너 상태 전부 출력
+        run: |
+          echo "runner name : $RUNNER_NAME"
+          echo "runner os   : $RUNNER_OS / $RUNNER_ARCH"
+          echo "workspace   : $GITHUB_WORKSPACE"
+          echo "event       : $GITHUB_EVENT_NAME"
+          echo "ref         : $GITHUB_REF"
+          echo "--- 러너 externals 경로 ---"
+          ls -la /home/runner/externals/ 2>/dev/null || echo "(호스트에서는 안 보인다)"
+          echo "--- 러너 버전 ---"
+          cat /home/runner/*.version 2>/dev/null || echo "(버전 파일 없음)"
+
+  rl810:
+    name: 2. rl8.10 job container
+    runs-on: cubridqa-1503-poc
+    container:
+      image: cubridci/cubridci:rl8.10
+    steps:
+      - name: 컨테이너 안 상태
+        run: |
+          echo "--- 이미지 ---"; cat /etc/redhat-release
+          echo "--- glibc ---"; ldd --version | head -1
+          echo "--- libstdc++ ---"; readlink /usr/lib64/libstdc++.so.6
+          echo "--- 러너가 붙인 externals ---"; ls -la /__e/ 2>/dev/null || echo "/__e 없음"
+          echo "--- 주입된 node ---"
+          for n in /__e/node*/bin/node; do
+            [ -x "$n" ] && echo "$n -> $($n --version 2>&1)"
+          done
+
+      # JS 액션이다. 러너가 /__e 의 node 로 실행한다. 여기가 판정 지점이다.
+      - name: JS 액션이 도는가 (actions/checkout)
+        uses: actions/checkout@v4
+
+      - name: checkout 결과
+        run: |
+          echo "checkout 성공"; git --version; ls -la | head
+
+  centos6:
+    name: 3. centos:6 대조군 (실패 예상)
+    runs-on: cubridqa-1503-poc
+    continue-on-error: true
+    container:
+      image: centos:6
+    steps:
+      - name: 컨테이너 안 상태
+        run: |
+          cat /etc/redhat-release
+          ldd --version | head -1
+
+      # rl810 과 같은 스텝이다. 여기서 실패해야 판정이 성립한다.
+      - name: JS 액션이 도는가 (실패해야 정상)
+        uses: actions/checkout@v4
+
+      - name: 여기 도달하면 안 된다
+        run: echo "예상과 다르다 — centos:6에서 JS 액션이 돌았다"
