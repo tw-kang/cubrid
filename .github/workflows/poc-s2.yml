@@ -28,6 +28,11 @@ jobs:
   hello:
     name: 1. 러너가 산다
     runs-on: cubridqa-1503-poc
+    # kubernetes 모드는 container 없는 job 을 거부한다
+    # (ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER 기본 true). 그래서 여기에도 준다.
+    # 이 job 이 통과하면 job pod 생성 경로까지 확인된 것이다.
+    container:
+      image: cubridci/cubridci:rl8.10
     steps:
       - name: 러너 상태 전부 출력
         run: |
