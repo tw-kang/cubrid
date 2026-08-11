@@ -1,0 +1,50 @@
+# PROTOTYPE — CUBRIDQA-1503 / S4.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 이것은 **실행되면 안 되는 판**이다.
+#
+# 두는 곳: fork(tw-kang/cubrid)의 브랜치 `poc-s4-untrusted` 의
+#   .github/workflows/poc-s4.yml  — 즉 기본 브랜치 판과 같은 경로, 같은 이름이다.
+#
+# 목적 (Q4-3): 기본 브랜치의 poc-s4 를 dispatch 하면서 입력 sha 로 이 브랜치의 head 를
+#   준다. 그러면 job B 가 이 파일을 checkout 한다. checkout 은 되지만 **실행되는 것은
+#   기본 브랜치 판**이어야 한다. 그것이 default branch 요건이다 (Q2 조사 4-5).
+#
+# 안전장치: 트리거를 workflow_dispatch 하나만 둔다. push 나 pull_request 를 넣지 않는다.
+#   workflow_dispatch 는 기본 브랜치의 워크플로만 실행하므로 이 파일은 어떤 경로로도
+#   스스로 돌지 않는다. 표식을 남길 뿐 실제로 해로운 일은 하지 않는다.
+#
+# 표식: POC_S4_DECOY_MARKER
+#   기본 브랜치 판에는 이 문자열이 없다. job B 가 grep 으로 둘을 가른다.
+
+name: poc-s4
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "POC_S4_DECOY_MARKER — 이 판이 돌면 격리가 깨진 것이다"
+        required: true
+        type: string
+
+# 변조된 판이 노리는 것을 흉내낸다. 실제로 넓힌 권한을 쓰지는 않는다.
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  decoy:
+    name: POC_S4_DECOY_MARKER — 이 job 이 보이면 실패다
+    runs-on: cubridqa-1503-poc
+    steps:
+      - name: 변조된 판이 돌았다
+        env:
+          # 공격자가 노리는 자리를 그대로 흉내낸다. 값은 쓰지 않는다.
+          CANARY: ${{ secrets.POC_S4_CANARY }}
+        run: |
+          echo "POC_S4_DECOY_MARKER"
+          echo "::error::변조된 워크플로 판이 실행됐다. default branch 요건이 깨졌다."
+          # 실제 유출은 하지 않는다. 주입 여부만 남긴다.
+          if [ -n "${CANARY:-}" ]; then
+            echo "::error::게다가 secret 이 이 판에 주입됐다 (길이 ${#CANARY})"
+          fi
+          exit 1
