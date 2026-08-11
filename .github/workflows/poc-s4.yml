@@ -42,7 +42,14 @@ permissions: {}
 jobs:
   # =====================================================================
   # job A — 신뢰 구역. secret 을 만지는 쪽이다.
-  # container 를 주지 않는다. 러너 pod 안에서 직접 돈다.
+  #
+  # container 를 반드시 준다. containerMode: kubernetes 인 ARC 러너는
+  # container 없는 job 을 거부한다 (2026-08-11 실측):
+  #   "Jobs without a job container are forbidden on this runner,
+  #    please add a 'container:' to your job or contact your
+  #    self-hosted runner administrator."
+  # 즉 이 러너에서는 모든 step 이 job pod 안에서 돈다. 러너 pod 파일시스템에는
+  # 워크플로가 손댈 수 없다. 그 자체가 격리에 보태지는 사실이다.
   # =====================================================================
   trusted-secret:
     name: A. 신뢰 구역 (secret 을 만진다)
@@ -50,6 +57,13 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+
+    container:
+      image: cubridci/cubridci:rl8.10
+
+    defaults:
+      run:
+        shell: bash
 
     outputs:
       runner_name: ${{ steps.id.outputs.runner_name }}
@@ -86,28 +100,28 @@ jobs:
             echo "marker=$h"
           } >> "$GITHUB_OUTPUT"
 
-      - name: A2. 러너 파일시스템에 흔적을 남긴다
+      - name: A2. 흔적을 남긴다 — job B 가 이것을 찾으면 재사용된 것이다
         run: |
           set -eo pipefail
-          # job B 가 이것을 찾을 수 있으면 러너가 재사용된 것이다.
-          # 두 자리에 남긴다.
-          #   1) 러너 홈 — 러너 pod 의 파일시스템
-          #   2) work 볼륨 상위 — job pod 에도 마운트되는 PVC
+          # 이 job 은 job pod 안에서 돈다. 러너 pod 파일시스템에는 손댈 수 없다.
+          # 손댈 수 있는 것은 work 볼륨(러너 pod 의 PVC 를 job pod 가 마운트한 것)이다.
+          # 러너가 ephemeral 이면 그 PVC 도 러너마다 새로 만들어진다.
+          # 그러므로 여기 남긴 마커가 job B 에 보이면 볼륨이 돌려쓰인 것이다.
+          up=$(cd "$GITHUB_WORKSPACE/.." && pwd)
           echo "poc-s4 run ${GITHUB_RUN_ID} attempt ${GITHUB_RUN_ATTEMPT}" \
-            > "$HOME/.poc-s4-runner-marker"
-          echo "poc-s4 run ${GITHUB_RUN_ID} attempt ${GITHUB_RUN_ATTEMPT}" \
-            > "$GITHUB_WORKSPACE/../.poc-s4-work-marker"
+            > "$up/.poc-s4-work-marker"
+          # job container 의 홈에도 남긴다. job pod 가 매번 새로 뜨면 이것도 안 보인다.
+          echo "poc-s4 run ${GITHUB_RUN_ID}" > "$HOME/.poc-s4-home-marker"
 
           echo "=== 남긴 것 ==="
-          ls -l "$HOME/.poc-s4-runner-marker" "$GITHUB_WORKSPACE/../.poc-s4-work-marker"
-          echo "HOME       : $HOME"
-          echo "work 상위  : $(cd "$GITHUB_WORKSPACE/.." && pwd)"
+          ls -l "$up/.poc-s4-work-marker" "$HOME/.poc-s4-home-marker"
+          echo "HOME      : $HOME"
+          echo "work 상위 : $up"
 
-          echo "=== 이 러너가 ephemeral 인지 보이는 단서 ==="
-          # ARC 는 --ephemeral 로 등록한다. .runner 에 그 값이 남는다.
-          for f in /home/runner/.runner /actions-runner/.runner; do
-            [ -f "$f" ] && { echo "--- $f ---"; cat "$f"; }
-          done || true
+          echo
+          echo "=== work 볼륨 상태 ==="
+          df -h "$up" || true
+          ls -Al "$up" || true
 
   # =====================================================================
   # job B — 비신뢰 구역. 입력받은 SHA 의 코드를 가져온다.
@@ -174,11 +188,13 @@ jobs:
           fi
 
           echo
-          echo "=== 러너 홈 흔적 (job container 에서는 애초에 안 보여야 정상) ==="
-          for f in /home/runner/.poc-s4-runner-marker /root/.poc-s4-runner-marker; do
-            if [ -f "$f" ]; then echo "⚠ 찾았다: $f"; cat "$f"; found=1; fi
-          done
-          [ "$found" -eq 0 ] && echo "없다"
+          echo "=== job container 홈 흔적 (job pod 가 매번 새로 뜨면 안 보인다) ==="
+          hf="$HOME/.poc-s4-home-marker"
+          if [ -f "$hf" ]; then
+            echo "⚠ 찾았다: $hf"; cat "$hf"; found=1
+          else
+            echo "없다 — job pod 가 새로 떴다 ($HOME)"
+          fi
 
           echo
           echo "=== 워크스페이스 안에 남은 것 ==="
