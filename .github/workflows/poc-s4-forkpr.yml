@@ -1,0 +1,41 @@
+# PROTOTYPE — CUBRIDQA-1503 / S4.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 이것은 **공격자 쪽 판**이다. 제2 계정(kangtaewoo)의 fork 브랜치에 둔다.
+#
+# 질문 (Q4-4): 외부 기여자가 fork PR 로 self-hosted 러너를 물 수 있는가.
+#
+# 근거가 되는 사실 (Q2 조사 4-2): `pull_request` 는 워크플로 파일을 **fork 가 통제하는
+#   commit** 에서 읽는다. 즉 base 저장소에 이 워크플로가 없어도, fork 가 PR 에 이 파일을
+#   넣으면 base 저장소의 이벤트로 돈다. 그러므로 "우리 워크플로에 pull_request 트리거가
+#   없다"는 것만으로는 방어가 되지 않는다.
+#
+# 이 판이 시험하는 방어선 둘:
+#   1. 저장소 설정 — fork PR 승인 정책 all_external_contributors (2026-08-11 적용)
+#   2. 러너 job hook — MODE=enforce, workflow_dispatch/repository_dispatch 만 허용
+#
+# 무해하다. echo 만 한다. secret 도 참조하지 않는다.
+# 만약 이 job 이 러너에서 실제로 돌면 두 방어선이 다 뚫린 것이다.
+
+name: poc-s4-forkpr
+
+on:
+  pull_request:
+    branches: [cubridqa-1503]
+
+permissions: {}
+
+jobs:
+  try-self-hosted:
+    name: 외부 기여자가 self-hosted 를 무는지 시험한다
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 5
+    container:
+      image: cubridci/cubridci:rl8.10
+    steps:
+      - name: 여기까지 왔으면 방어선이 뚫린 것이다
+        run: |
+          echo "POC_S4_FORKPR_REACHED_RUNNER"
+          echo "이벤트  : ${GITHUB_EVENT_NAME:-}"
+          echo "러너    : ${RUNNER_NAME:-}"
+          echo "hostname: $(hostname)"
+          echo "actor   : ${GITHUB_ACTOR:-}"
