@@ -1,0 +1,118 @@
+# PROTOTYPE — CUBRIDQA-1503 / S5.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 질문: 이 클러스터에서 GHA job 을 몇 개까지 동시에 돌릴 수 있나. 무엇이 먼저 막나.
+#
+# 두는 곳: fork(tw-kang/cubrid)의 *기본 브랜치* `cubridqa-1503` 의
+#   .github/workflows/poc-s5.yml
+#
+# 실행:
+#   gh workflow run poc-s5.yml --repo tw-kang/cubrid -f fanout=50 -f hold=90
+#
+# --- 설계 ---
+#
+# 1. **노드 빌드를 쓰지 않는다.** run 당 372MB 를 받는다 (S3 실측). 50개면 18GB 가
+#    30Mbps 공유 회선을 탄다. 여기서 재는 것은 스케줄링이지 빌드가 아니다.
+#    각 job 은 신원만 찍고 지정된 초만큼 자리를 잡고 있다가 끝난다.
+#
+# 2. **액션을 쓰지 않는다.** 액션 tarball 을 러너마다 받으면 그것도 WAN 이다.
+#    matrix 를 만드는 job 만 GitHub-hosted 에 둔다. self-hosted 자리를 안 먹는다.
+#
+# 3. **이미지는 rl8.10 하나다.** 두 워커 모두 캐시하고 있다 (554MB, 2026-08-11 확인).
+#    새로 당기는 것이 없으므로 WAN 은 사실상 0 이다.
+#
+# 4. `hold` 는 job 이 자리를 잡고 있는 초다. 이것이 충분히 길어야 동시 실행이 실제로
+#    겹친다. 짧으면 앞 job 이 끝나면서 뒤 job 이 들어와 최대 동시 수가 안 나온다.
+#
+# --- 무엇이 먼저 막는가 (2026-08-11 사전 계산) ---
+#
+#   pod 수     : 노드당 110. 워커 2대. 지금 71개 사용 중 → 여유 149.
+#                ARC k8s 모드는 러너 1개당 pod 2개(러너 pod + job pod)를 쓴다.
+#                → **약 74 동시 러너가 물리 상한이다.**
+#   cpu        : 워커 2대 384 코어, 여유 약 266. requests 1 이면 병목이 아니다.
+#   memory     : 워커 2대 1TB, 여유 약 800Gi. requests 2Gi 면 병목이 아니다.
+#   matrix     : GitHub 제한 256.
+#
+# 즉 **matrix 256 에 닿기 전에 kubelet 의 pod 제한에 걸린다**는 것이 가설이다.
+# 이 워크플로가 그것을 실증한다.
+
+name: poc-s5
+
+on:
+  workflow_dispatch:
+    inputs:
+      fanout:
+        description: "동시에 띄울 job 수 (matrix 크기, 최대 256)"
+        required: true
+        type: string
+      hold:
+        description: "각 job 이 자리를 잡고 있을 초"
+        required: false
+        default: "90"
+        type: string
+
+permissions: {}
+
+jobs:
+  # matrix 를 만드는 job. GitHub-hosted 에 둔다 — self-hosted 자리를 먹지 않는다.
+  plan:
+    name: matrix 생성
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      idx: ${{ steps.gen.outputs.idx }}
+    steps:
+      - name: fanout 검사와 matrix 생성
+        id: gen
+        env:
+          FANOUT: ${{ inputs.fanout }}
+        run: |
+          set -eo pipefail
+          # 입력을 셸 본문에 박지 않는다. env 로 받는다 (S4 의 규칙).
+          if [[ ! "$FANOUT" =~ ^[0-9]{1,3}$ ]] || [ "$FANOUT" -lt 1 ] || [ "$FANOUT" -gt 256 ]; then
+            echo "::error::fanout 은 1..256 의 정수여야 한다"
+            exit 1
+          fi
+          # GitHub 의 matrix 상한은 256 이다. 그 위는 아예 못 만든다.
+          idx=$(seq 1 "$FANOUT" | jq -R . | jq -sc .)
+          echo "idx=$idx" >> "$GITHUB_OUTPUT"
+          echo "matrix 크기: $FANOUT"
+
+  fan:
+    name: "자리 잡기 ${{ matrix.i }}"
+    needs: plan
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 30
+    strategy:
+      # 하나가 죽어도 나머지를 계속 돌린다. 어디서 막히는지 보려면 전부 시도해야 한다.
+      fail-fast: false
+      # max-parallel 을 주지 않는다. GitHub 이 아니라 클러스터가 상한을 정하게 둔다.
+      matrix:
+        i: ${{ fromJson(needs.plan.outputs.idx) }}
+
+    container:
+      image: cubridci/cubridci:rl8.10
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 신원 + 자리 잡기
+        env:
+          HOLD: ${{ inputs.hold }}
+        run: |
+          set -eo pipefail
+          if [[ ! "$HOLD" =~ ^[0-9]{1,4}$ ]]; then
+            echo "::error::hold 는 정수여야 한다"
+            exit 1
+          fi
+          echo "idx      : ${{ matrix.i }}"
+          echo "러너     : ${RUNNER_NAME:-}"
+          echo "job pod  : $(hostname)"
+          echo "시작     : $(date -u +%FT%T.%3NZ)"
+          # 노드 이름은 job pod 에서 직접 안 보인다. IP 로 갈음한다.
+          echo "pod IP   : $(hostname -i 2>/dev/null || echo '?')"
+          echo "cpu quota: $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo '?')"
+          echo "mem limit: $(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo '?')"
+          sleep "$HOLD"
+          echo "종료     : $(date -u +%FT%T.%3NZ)"
