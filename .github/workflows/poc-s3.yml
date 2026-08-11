@@ -73,6 +73,9 @@ jobs:
       BUILD_SENTINEL: .complete
       # 운영 경로(/home/build-cache/builds)가 아니다. 위 주석 2 참조.
       POC_BUILD_ROOT: /home/build-cache/poc-1503/builds
+      # build.log 를 여기에 남긴다. pod 의 디스크는 job 이 끝나면 사라지고,
+      # 아티팩트 업로드는 액션이라 WAN 을 더 쓴다. gluster 는 LAN 이다.
+      POC_LOG_ROOT: /home/build-cache/poc-1503/logs
 
     steps:
       # ---------------------------------------------------------------
@@ -252,12 +255,39 @@ jobs:
           ccache --max-size=5G
           ccache -z
 
+          # 1차 실측에서 이 스텝 하나가 371MB 를 받았다. 3rdparty 타르볼을 전부 더해도
+          # 137MB 라 설명이 안 된다. 무엇이 언제 받는지 알려면 시간축이 필요하다.
+          # 2초마다 수신 누계를 찍는다. 빌드 진행 표시(`[ n%]`)에도 GHA 가 시각을
+          # 붙이므로 둘을 나란히 놓으면 어느 구간인지 갈린다.
+          ( while :; do
+              printf '%s\t' "$(date -u +%H:%M:%S)"
+              awk 'NR > 2 { n = $1; sub(/:.*/, "", n); if (n != "lo") rx += $2 } END { print rx }' /proc/net/dev
+              sleep 2
+            done > "$RUNNER_TEMP/nettrace.tsv" ) &
+          sampler=$!
+
           # -j 를 주지 않는다. ninja 1.11.1 이 cgroup quota 를 읽어 스스로 정한다.
+          set +e
           /entrypoint.sh build -m optdebug
+          rc=$?
+          set -e
+          kill "$sampler" 2>/dev/null || true
+
+          echo "=== 수신 1MB 넘게 늘어난 구간만 ==="
+          awk -F'\t' '
+            NR == 1 { base = $2; prev = $2; pt = $1; next }
+            $2 - prev > 1048576 {
+              printf "%s -> %s  +%8.2f MB  (누계 %8.2f MB)\n",
+                pt, $1, ($2 - prev) / 1048576, ($2 - base) / 1048576
+              prev = $2; pt = $1
+            }
+            END { printf "빌드 스텝 총 수신: %.2f MB\n", (prev - base) / 1048576 }
+          ' "$RUNNER_TEMP/nettrace.tsv"
 
           ccache -s
 
           "$RUNNER_TEMP/netsnap.sh" 20-build-done
+          exit $rc
 
       # ---------------------------------------------------------------
       - name: 5. 발행 — staging 에 모으고 rename 한 번으로 공개한다
@@ -329,8 +359,17 @@ jobs:
         run: |
           f="$GITHUB_WORKSPACE/build.log"
           if [ -f "$f" ]; then
-            echo "=== build.log 끝 200줄 ==="
-            tail -200 "$f"
+            # 통째로 남긴다. 무엇을 내려받았는지는 entrypoint 의 grep 을 통과하지
+            # 못해서 GHA 로그에 안 보인다. build.log 에는 다 들어 있다.
+            mkdir -p "$POC_LOG_ROOT"
+            cp "$f" "$POC_LOG_ROOT/${GITHUB_RUN_ID}-build.log"
+            echo "저장: $POC_LOG_ROOT/${GITHUB_RUN_ID}-build.log ($(wc -l < "$f") 줄)"
+            echo "=== build.log 끝 100줄 ==="
+            tail -100 "$f"
           else
             echo "build.log 없음"
+          fi
+          if [ -f "$RUNNER_TEMP/nettrace.tsv" ]; then
+            mkdir -p "$POC_LOG_ROOT"
+            cp "$RUNNER_TEMP/nettrace.tsv" "$POC_LOG_ROOT/${GITHUB_RUN_ID}-nettrace.tsv"
           fi
