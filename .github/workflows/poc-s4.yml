@@ -260,11 +260,14 @@ jobs:
           echo
           echo "=== 가져온 판의 워크플로 파일에 변조 표식이 있나 ==="
           f=.github/workflows/poc-s4.yml
+          # 패턴을 문자 클래스로 깨 둔다. 그대로 쓰면 이 파일(기본 브랜치 판)에도
+          # 표식 문자열이 리터럴로 남아 "표식으로 두 판을 가른다"가 성립하지 않는다.
+          pat='POC_S4_DEC[O]Y_MARKER'
           if [ ! -f "$f" ]; then
             echo "가져온 판에는 $f 가 없다"
-          elif grep -q 'POC_S4_DECOY_MARKER' "$f"; then
+          elif grep -q "$pat" "$f"; then
             echo "있다 — 가져온 판은 변조된 판이다:"
-            grep -n 'POC_S4_DECOY_MARKER' "$f"
+            grep -n "$pat" "$f"
             echo
             echo "그런데 지금 도는 것은 이 파일이 아니다. 위의 GITHUB_WORKFLOW_REF 를 보라."
             echo "판정: default branch 요건이 성립한다"
