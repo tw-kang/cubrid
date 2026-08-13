@@ -1,0 +1,667 @@
+# PROTOTYPE — CUBRIDQA-1503 / S6.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 질문: CircleCI 가 서버로 해 주던 세 가지를 GHA 에서 자체 구현할 수 있나.
+#         1. 소요시간 기반 분배   (circleci tests run --split-by=timings)
+#         2. 결과 수집·조회        (store_test_results)
+#         3. 실패 케이스 목록      (Tests 탭)
+#       그리고 그 위에서 shell suite 가 완주하는가.
+#
+# 두는 곳: fork(tw-kang/cubrid)의 *기본 브랜치* `cubridqa-1503` 의
+#   .github/workflows/poc-s6.yml
+#
+# 실행:
+#   gh workflow run poc-s6.yml --repo tw-kang/cubrid -f parallelism=50
+#   gh workflow run poc-s6.yml --repo tw-kang/cubrid -f parallelism=5 -f limit=100 \
+#      -f sabotage=empty-shard        # "0건 통과 = 초록" 방지 장치 시험
+#
+# --- 설계 ---
+#
+# 1. **분배를 plan job 한 곳에서 한다.**
+#    CircleCI 는 50개 노드가 각자 `circleci tests run` 을 불러 서버가 나눠 준다.
+#    GHA 에는 그 서버가 없다. 노드마다 같은 알고리즘을 돌려도 답은 같지만,
+#    그러면 CircleCI 판이 가진 함정이 그대로 남는다 — 분배가 실패한 노드가
+#    "받은 것이 없다"와 "받지 못했다"를 구별하지 못한다.
+#    plan 이 한 번 나누면 **분배 실패는 plan 실패이고 곧 워크플로 빨강이다.**
+#
+# 2. **"0건 통과 = 초록"을 세 겹으로 막는다.**
+#    ① plan  : 나눈 것의 합이 전체와 다르면 실패한다.
+#    ② shard : 자기 몫 파일이 없거나 비었으면 실패한다. CircleCI 판은 이때
+#              `circleci-agent step halt` 로 **성공 종료**한다. 그것이 함정이다.
+#    ③ collect: 실제로 실행된 케이스 수가 전체와 다르면 실패한다.
+#    ①③ 은 shard 가 통째로 죽어도 잡는다. ② 만으로는 못 잡는다.
+#
+# 3. **소요시간은 GlusterFS 에 둔다.**
+#    /home/build-cache/poc-1503/timings/shell.tsv
+#    회선이 30Mbps 공유다. Actions Cache 나 아티팩트는 그 회선을 쓴다.
+#    GlusterFS 는 LAN 이고 job pod 에 이미 hostPath 로 붙어 있다 — WAN 0.
+#    test_shell 은 self-hosted 전용이므로 "GitHub-hosted 에서 안 보인다"는 제약이 없다.
+#
+# 4. **분배는 LPT (Longest Processing Time first) 다.**
+#    긴 것부터 꺼내 그때까지 가장 한산한 shard 에 넣는다.
+#    실측 편차가 크다 — 최소 1.5초, 중앙 10.4초, 최대 301초. **29배다.**
+#    이름순으로 나누면 긴 것이 한 shard 에 몰릴 수 있다.
+#    awk 로 짠다. 이미지에 python 이 있다는 보장이 없다.
+#
+# 5. **첫 run 은 소요시간 데이터가 없다.** 전부 기본값이 되어 사실상 이름순이 된다.
+#    그 run 이 데이터를 만든다. 두 번째 run 부터 분배가 효과를 낸다.
+#    plan 이 "몇 건이 실측값이고 몇 건이 기본값인지"를 찍으므로 그 전환이 눈에 보인다.
+#
+# 6. **테스트케이스를 fetch 하지 않는다** (S6a 와 같다).
+#    노드 seed(/home/tc-repo, 2026-07-27)를 overlay lowerdir 로 쓴다.
+#    private 토큰 불필요, WAN 0. 자세한 것은 S6a 주석 참조.
+
+name: poc-s6
+
+on:
+  workflow_dispatch:
+    inputs:
+      parallelism:
+        description: "shard 수 (CircleCI test_shell 은 50). 1..256"
+        required: false
+        default: "50"
+        type: string
+      sha:
+        description: "빌드 SHA. 비우면 build-cache 에서 가장 최근 debug 빌드를 고른다"
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "케이스 수 상한. 0 이면 전체 (약 3,252)"
+        required: false
+        default: "0"
+        type: string
+      sabotage:
+        description: "분배 실패 방지 장치 시험. none | empty-shard | lose-shard"
+        required: false
+        default: "none"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  WORKDIR: /home
+  TC_DIR: /home/cubrid-testcases-private-ex
+  CUBRID_DIR: /home/CUBRID
+  BUILD_ROOT: /home/build-cache/builds
+  POC_ROOT: /home/build-cache/poc-1503
+  TIMINGS: /home/build-cache/poc-1503/timings/shell.tsv
+
+jobs:
+  # =================================================================
+  # 분배. 여기가 실패하면 shard 는 하나도 돌지 않는다.
+  # =================================================================
+  plan:
+    name: 분배
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 30
+    container:
+      image: cubridci/cubridci:test_shell
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      matrix: ${{ steps.split.outputs.matrix }}
+      total: ${{ steps.split.outputs.total }}
+      rundir: ${{ steps.split.outputs.rundir }}
+      sha: ${{ steps.build.outputs.sha }}
+      timed: ${{ steps.split.outputs.timed }}
+
+    steps:
+      - name: 입력 검사
+        id: args
+        env:
+          IN_PAR: ${{ inputs.parallelism }}
+          IN_LIMIT: ${{ inputs.limit }}
+          IN_SAB: ${{ inputs.sabotage }}
+        run: |
+          set -eo pipefail
+          # 입력을 셸 본문에 박지 않는다. env 로 받는다 (S4 의 규칙).
+          if [[ ! "$IN_PAR" =~ ^[0-9]{1,3}$ ]] || [ "$IN_PAR" -lt 1 ] || [ "$IN_PAR" -gt 256 ]; then
+            echo "::error::parallelism 은 1..256 의 정수여야 한다"; exit 1
+          fi
+          if [[ ! "$IN_LIMIT" =~ ^[0-9]{1,5}$ ]]; then
+            echo "::error::limit 은 정수여야 한다"; exit 1
+          fi
+          case "$IN_SAB" in
+            none|empty-shard|lose-shard) ;;
+            *) echo "::error::sabotage 는 none|empty-shard|lose-shard 여야 한다"; exit 1 ;;
+          esac
+          echo "parallelism=$IN_PAR / limit=$IN_LIMIT / sabotage=$IN_SAB"
+          echo "par=$IN_PAR" >> "$GITHUB_OUTPUT"
+          echo "limit=$IN_LIMIT" >> "$GITHUB_OUTPUT"
+
+      - name: 빌드 고르기
+        id: build
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          set -eo pipefail
+          if [ -n "$INPUT_SHA" ]; then
+            if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::sha 는 소문자 40자 hex 여야 한다"; exit 1
+            fi
+            sha="$INPUT_SHA"
+          else
+            sha=$(find "$BUILD_ROOT" -mindepth 2 -maxdepth 2 -type d -name debug -printf '%T@ %h\n' 2>/dev/null \
+                  | sort -rn | head -1 | awk '{print $2}' | xargs -r basename)
+          fi
+          [ -n "$sha" ] || { echo "::error::발행된 빌드가 없다"; exit 1; }
+          [ -d "$BUILD_ROOT/$sha/debug/CUBRID" ] || { echo "::error::빌드가 없다: $sha"; exit 1; }
+          echo "SHA: $sha ($(stat -c '%y' "$BUILD_ROOT/$sha/debug"))"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: 케이스 목록 + LPT 분배
+        id: split
+        env:
+          PAR: ${{ steps.args.outputs.par }}
+          LIMIT: ${{ steps.args.outputs.limit }}
+          SABOTAGE: ${{ inputs.sabotage }}
+        run: |
+          set -eo pipefail
+
+          # --- 테스트케이스 overlay. 목록을 만들려면 읽을 수 있어야 한다 ---
+          mkdir -p /rw/upper /rw/work "$TC_DIR"
+          mount -t overlay overlay -o lowerdir=/ro,upperdir=/rw/upper,workdir=/rw/work "$TC_DIR"
+          rm -rf "$TC_DIR/shell/_25_unstable"     # 운영과 같은 제외
+
+          # --- 목록. 운영 config.yml 과 같은 glob + 필터다 ---
+          find "$TC_DIR/shell" -path '*/cases/*.sh' 2>/dev/null \
+            | grep -P '/([^/]+)/cases/\1\.sh$' \
+            | sed "s#^$TC_DIR/#cubrid-testcases-private-ex/#" \
+            | sort > /tmp/all.list
+          if [ "$LIMIT" -gt 0 ]; then
+            head -"$LIMIT" /tmp/all.list > /tmp/cases.list
+          else
+            cp /tmp/all.list /tmp/cases.list
+          fi
+          total=$(wc -l < /tmp/cases.list)
+          echo "전체 케이스: $(wc -l < /tmp/all.list) / 대상: $total"
+          [ "$total" -gt 0 ] || { echo "::error::케이스가 하나도 없다"; exit 1; }
+
+          # --- 소요시간 읽기 ---
+          # 형식: <케이스 경로>\t<초>.  없으면 빈 파일로 시작한다.
+          mkdir -p "$(dirname "$TIMINGS")"
+          [ -f "$TIMINGS" ] || : > "$TIMINGS"
+          echo "소요시간 데이터: $(wc -l < "$TIMINGS") 건"
+
+          # 기본값은 실측 중앙값이다. 데이터가 있으면 그 중앙값을 쓴다.
+          if [ -s "$TIMINGS" ]; then
+            dflt=$(cut -f2 "$TIMINGS" | sort -n | awk '{a[NR]=$1} END {print (NR? a[int(NR/2)+1] : 10)}')
+          else
+            dflt=10
+          fi
+          echo "기본값(신규 케이스에 매기는 초): $dflt"
+
+          # --- LPT 분배 ---
+          # 긴 것부터 꺼내 그때까지 합이 가장 작은 shard 에 넣는다.
+          # shard 수가 50 이면 케이스마다 50 번 훑어도 3252×50 = 16만 번이라 순식간이다.
+          mkdir -p /tmp/shards
+          awk -v par="$PAR" -v dflt="$dflt" -v tf="$TIMINGS" '
+            BEGIN {
+              FS = "\t"
+              while ((getline line < tf) > 0) {
+                n = split(line, a, "\t")
+                if (n >= 2) t[a[1]] = a[2] + 0
+              }
+              close(tf)
+            }
+            {
+              c = $0
+              if (c in t) { sec = t[c]; timed++ } else { sec = dflt }
+              # 내림차순 정렬을 위해 키를 만든다. 같은 값이면 이름순으로 결정론적이다.
+              printf "%015.3f\t%s\n", sec, c
+            }
+            END { print timed > "/tmp/timed.count" }
+          ' /tmp/cases.list | sort -rn -k1,1 -k2,2 > /tmp/sorted.tsv
+
+          timed=$(cat /tmp/timed.count 2>/dev/null || echo 0)
+          echo "실측값 적용: $timed 건 / 기본값: $((total - timed)) 건"
+
+          awk -v par="$PAR" '
+            BEGIN { FS = "\t"; for (i = 0; i < par; i++) load[i] = 0 }
+            {
+              # 가장 한산한 shard 를 찾는다.
+              best = 0
+              for (i = 1; i < par; i++) if (load[i] < load[best]) best = i
+              load[best] += $1
+              printf "%s\n", $2 >> sprintf("/tmp/shards/%02d.list", best)
+              cnt[best]++
+            }
+            END {
+              for (i = 0; i < par; i++)
+                printf "%02d\t%d\t%.1f\n", i, cnt[i] + 0, load[i]
+            }
+          ' /tmp/sorted.tsv > /tmp/plan.tsv
+
+          echo
+          echo "=== 분배 결과 (shard / 케이스 수 / 예상 초) ==="
+          sort -t$'\t' -k3,3 -rn /tmp/plan.tsv | head -5
+          echo "..."
+          sort -t$'\t' -k3,3 -rn /tmp/plan.tsv | tail -3
+          echo
+          awk -F'\t' '{s+=$3; if(NR==1||$3>mx)mx=$3; if(NR==1||$3<mn)mn=$3; n++}
+                      END {printf "예상 최장 shard: %.1f초 / 최단: %.1f초 / 편차: %.2f배\n", mx, mn, (mn>0? mx/mn : 0)
+                           printf "전부 합치면: %.1f분 (순차라면)\n", s/60}' /tmp/plan.tsv
+
+          # --- ① 방지 장치: 나눈 것의 합이 전체와 같은가 ---
+          got=$(awk -F'\t' '{s+=$2} END {print s+0}' /tmp/plan.tsv)
+          echo
+          echo "검증 ①: 분배 합계 $got vs 전체 $total"
+          if [ "$got" -ne "$total" ]; then
+            echo "::error::분배가 케이스를 잃었다 ($got != $total)"
+            exit 1
+          fi
+          echo "  일치한다"
+
+          # --- run 디렉토리에 발행 ---
+          rundir="$POC_ROOT/runs/${GITHUB_RUN_ID}"
+          mkdir -p "$rundir/shards" "$rundir/results"
+          for i in $(seq 0 $((PAR - 1))); do
+            f=$(printf "%02d.list" "$i")
+            # 케이스가 shard 수보다 적으면 빈 shard 가 생긴다. 그것은 정상이 아니다 —
+            # plan 이 여기서 막는다. shard 쪽 검사는 "받지 못했다"를 잡는 용도다.
+            if [ ! -f "/tmp/shards/$f" ]; then
+              echo "::error::shard $i 에 배정된 케이스가 없다. parallelism($PAR)이 케이스 수($total)보다 큰가"
+              exit 1
+            fi
+            cp "/tmp/shards/$f" "$rundir/shards/$f"
+          done
+          cp /tmp/plan.tsv "$rundir/plan.tsv"
+          cp /tmp/cases.list "$rundir/cases.list"
+
+          # --- sabotage: 방지 장치가 실제로 잡는지 본다 ---
+          case "$SABOTAGE" in
+            empty-shard)
+              echo "::warning::sabotage=empty-shard — shard 00 의 몫을 비운다. shard 00 이 실패해야 한다"
+              : > "$rundir/shards/00.list"
+              ;;
+            lose-shard)
+              echo "::warning::sabotage=lose-shard — shard 00 의 몫 파일을 지운다. shard 00 이 실패해야 한다"
+              rm -f "$rundir/shards/00.list"
+              ;;
+          esac
+
+          # --- matrix ---
+          matrix=$(seq 0 $((PAR - 1)) | awk '{printf "%02d\n", $1}' | jq -R . | jq -sc .)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "timed=$timed" >> "$GITHUB_OUTPUT"
+          echo "rundir=$rundir" >> "$GITHUB_OUTPUT"
+          echo
+          echo "발행: $rundir"
+
+      - name: 분배 요약
+        run: |
+          set -eo pipefail
+          {
+            echo "## 분배"
+            echo
+            echo "| 항목 | 값 |"
+            echo "|---|---|"
+            echo "| 대상 케이스 | ${{ steps.split.outputs.total }} |"
+            echo "| shard | ${{ steps.args.outputs.par }} |"
+            echo "| 소요시간 실측 적용 | ${{ steps.split.outputs.timed }} 건 |"
+            echo "| 빌드 | \`${{ steps.build.outputs.sha }}\` |"
+            echo "| run 디렉토리 | \`${{ steps.split.outputs.rundir }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # =================================================================
+  # 실행. shard 마다 자기 몫만 돌린다.
+  # =================================================================
+  shard:
+    name: "shard ${{ matrix.i }}"
+    needs: plan
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 120
+    strategy:
+      # 하나가 죽어도 나머지를 계속 돌린다. 실패 목록을 모으는 것이 목적이다.
+      fail-fast: false
+      # max-parallel 을 주지 않는다. maxRunners 가 상한이다.
+      matrix:
+        i: ${{ fromJson(needs.plan.outputs.matrix) }}
+    container:
+      image: cubridci/cubridci:test_shell
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 내 몫을 받는다 — 여기가 "0건 통과 = 초록"을 막는 둘째 겹이다
+        id: mine
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          IDX: ${{ matrix.i }}
+        run: |
+          set -eo pipefail
+          f="$RUNDIR/shards/${IDX}.list"
+
+          # ② 방지 장치.
+          # CircleCI 판은 여기서 `circleci-agent step halt` 로 **성공 종료**한다.
+          # 그 판에서는 서버가 "네 몫은 0건"이라고 답할 수 있어 정상이기 때문이다.
+          # 이 설계에서는 plan 이 이미 전부 나눴다. 빈 몫은 정상이 아니라 **버그다.**
+          if [ ! -f "$f" ]; then
+            echo "::error::내 몫 파일이 없다: $f"
+            echo "  plan 이 만들지 않았거나 사라졌다. 0건을 성공으로 보지 않는다."
+            exit 1
+          fi
+          n=$(wc -l < "$f")
+          if [ "$n" -eq 0 ]; then
+            echo "::error::내 몫이 0건이다: $f"
+            echo "  plan 이 전부 나눴으므로 0건은 버그다. 0건을 성공으로 보지 않는다."
+            exit 1
+          fi
+          echo "내 몫: $n 건"
+          head -3 "$f"
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+
+      - name: 저장 구조 — overlay 두 개
+        env:
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -eo pipefail
+          mkdir -p /rw/upper /rw/work "$TC_DIR"
+          mount -t overlay overlay -o lowerdir=/ro,upperdir=/rw/upper,workdir=/rw/work "$TC_DIR"
+
+          lower="$BUILD_ROOT/$SHA/debug/CUBRID"
+          [ -d "$lower" ] || { echo "::error::빌드가 없다: $lower"; exit 1; }
+          mkdir -p /build-rw/upper /build-rw/work "$CUBRID_DIR"
+          mount -t overlay overlay \
+            -o lowerdir="$lower",upperdir=/build-rw/upper,workdir=/build-rw/work "$CUBRID_DIR"
+          echo "테스트케이스 + CUBRID 마운트됨"
+
+      - name: CTP 준비
+        run: |
+          set -eo pipefail
+          git -c fetch.parallel=0 clone -q --depth 1 --no-tags \
+            https://github.com/CUBRID/cubrid-testtools.git "$WORKDIR/cubrid-testtools"
+          sudo /usr/sbin/sshd || /usr/sbin/sshd || true
+
+      - name: 내 몫만 남긴다
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          IDX: ${{ matrix.i }}
+        run: |
+          set -eo pipefail
+          rm -rf "$TC_DIR/shell/_25_unstable"
+
+          # plan 이 준 경로는 cubrid-testcases-private-ex/... 로 시작한다.
+          # 지우는 쪽은 절대 경로라 접두사를 맞춘다.
+          sed "s#^cubrid-testcases-private-ex/#$TC_DIR/#" "$RUNDIR/shards/${IDX}.list" \
+            | xargs -n1 dirname | sort -u > /tmp/keep_dirs.list
+          echo "남길 디렉토리: $(wc -l < /tmp/keep_dirs.list)"
+
+          find "$TC_DIR/shell" -name cases -type d \
+            | grep -v -F -f /tmp/keep_dirs.list \
+            | xargs -r rm -rf
+
+          left=$(find "$TC_DIR/shell" -path '*/cases/*.sh' 2>/dev/null | grep -Pc '/([^/]+)/cases/\1\.sh$' || echo 0)
+          echo "남은 케이스: $left (기대: ${{ steps.mine.outputs.n }})"
+          echo "/rw: $(df -h /rw | tail -1 | awk '{print $3" 사용 / "$2}')"
+
+      - name: CTP 실행
+        id: ctp
+        env:
+          # CTP 가 읽는 CircleCI 변수는 이것 하나다 (ShellHelper.getTestNodeTitle).
+          # 로그의 EnvId 라벨에만 쓴다 — 없으면 전부 `local` 이 되어 어느 shard 의
+          # 로그인지 구별되지 않는다. 넣으면 운영과 같은 `parallel-NN` 이 된다.
+          # 테스트케이스(.sh) 쪽은 CIRCLE_* 를 하나도 읽지 않는다 (전수 확인).
+          CIRCLE_NODE_INDEX: ${{ matrix.i }}
+        run: |
+          set -eo pipefail
+          ulimit -c 10485760
+          set +e
+          ( cd "$CTP_HOME" && HOME="$WORKDIR" ./bin/ctp.sh shell -c "$CTP_HOME/conf/shell_ci.conf" )
+          rc=$?
+          set -e
+          echo "ctp exit: $rc"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          # CTP 가 0 이 아니어도 여기서 죽이지 않는다. 결과를 발행해야 collect 가 센다.
+          # 실패 판정은 결과를 보고 아래에서 한다.
+
+      - name: 결과 발행 — collect 가 이것을 딛는다
+        if: always()
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          IDX: ${{ matrix.i }}
+        run: |
+          set -eo pipefail
+          out="$RUNDIR/results/${IDX}"
+          mkdir -p "$out"
+          logs="$CTP_HOME/result/shell/current_runtime_logs"
+
+          if [ -d "$logs" ]; then
+            for f in test-shell.xml test_status.data feedback.log; do
+              cp -f "$(readlink -f "$logs")/$f" "$out/$f" 2>/dev/null || true
+            done
+          fi
+
+          # shard 가 여기까지 왔다는 표식. 없으면 collect 가 "통째로 죽었다"로 센다.
+          printf 'idx=%s\nassigned=%s\nctp_rc=%s\n' \
+            "$IDX" "${{ steps.mine.outputs.n }}" "${{ steps.ctp.outputs.rc }}" > "$out/shard.done"
+
+          echo "발행: $out"
+          ls -la "$out"
+          [ -f "$out/test_status.data" ] && cat "$out/test_status.data" || echo "(상태 파일 없음)"
+
+      - name: 판정
+        if: always()
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          IDX: ${{ matrix.i }}
+        run: |
+          set -eo pipefail
+          out="$RUNDIR/results/${IDX}"
+          st="$out/test_status.data"
+          [ -f "$st" ] || { echo "::error::CTP 상태 파일이 없다 — 테스트가 돌지 않았다"; exit 1; }
+
+          exec_n=$(awk -F= '/total_executed_case_count/ {print $2+0}' "$st")
+          fail_n=$(awk -F= '/total_fail_case_count/ {print $2+0}' "$st")
+          skip_n=$(awk -F= '/total_skip_case_count/ {print $2+0}' "$st")
+          want="${{ steps.mine.outputs.n }}"
+          echo "배정 $want / 실행 $exec_n / 실패 $fail_n / 건너뜀 $skip_n"
+
+          # 실행 + 건너뜀 이 배정과 맞아야 한다. 적으면 조용히 빠진 것이 있다.
+          if [ "$((exec_n + skip_n))" -lt "$want" ]; then
+            echo "::error::배정 $want 인데 $((exec_n + skip_n)) 건만 처리됐다 — 조용히 빠진 케이스가 있다"
+            exit 1
+          fi
+          [ "$fail_n" -eq 0 ] || { echo "::error::$fail_n 건 실패"; exit 1; }
+          echo "이 shard 는 통과다"
+
+  # =================================================================
+  # 수집. shard 가 죽어도 돈다. 여기가 셋째 겹이다.
+  # =================================================================
+  collect:
+    name: 수집
+    needs: [plan, shard]
+    if: always()
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 30
+    container:
+      image: cubridci/cubridci:test_shell
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 결과를 모은다
+        id: gather
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          TOTAL: ${{ needs.plan.outputs.total }}
+        run: |
+          set -eo pipefail
+          if [ -z "$RUNDIR" ] || [ ! -d "$RUNDIR" ]; then
+            echo "::error::plan 이 run 디렉토리를 만들지 못했다. 분배 단계에서 끝났다."
+            exit 1
+          fi
+
+          planned=$(ls "$RUNDIR/shards"/*.list 2>/dev/null | wc -l)
+          done_n=$(ls "$RUNDIR/results"/*/shard.done 2>/dev/null | wc -l)
+          echo "shard: 계획 $planned / 결과 발행 $done_n"
+
+          # 각 shard 의 상태를 합산한다.
+          : > /tmp/agg.tsv
+          for d in "$RUNDIR"/results/*/; do
+            i=$(basename "$d")
+            st="$d/test_status.data"
+            if [ -f "$st" ]; then
+              awk -F= -v i="$i" '
+                /total_case_count/        {c=$2+0}
+                /total_executed_case_count/ {e=$2+0}
+                /total_success_case_count/  {s=$2+0}
+                /total_fail_case_count/     {f=$2+0}
+                /total_skip_case_count/     {k=$2+0}
+                END {printf "%s\t%d\t%d\t%d\t%d\t%d\n", i, c, e, s, f, k}' "$st" >> /tmp/agg.tsv
+            else
+              printf "%s\t0\t0\t0\t0\t0\n" "$i" >> /tmp/agg.tsv
+            fi
+          done
+
+          exec_sum=$(awk -F'\t' '{s+=$3} END {print s+0}' /tmp/agg.tsv)
+          succ_sum=$(awk -F'\t' '{s+=$4} END {print s+0}' /tmp/agg.tsv)
+          fail_sum=$(awk -F'\t' '{s+=$5} END {print s+0}' /tmp/agg.tsv)
+          skip_sum=$(awk -F'\t' '{s+=$6} END {print s+0}' /tmp/agg.tsv)
+          echo "실행 $exec_sum / 성공 $succ_sum / 실패 $fail_sum / 건너뜀 $skip_sum (대상 $TOTAL)"
+
+          for k in planned done_n exec_sum succ_sum fail_sum skip_sum; do
+            echo "$k=${!k}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: 실패 케이스 목록 — 출처는 CTP 의 JUnit XML 이다
+        id: failures
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+        run: |
+          set -eo pipefail
+          : > /tmp/failed.list
+          # CTP 가 쓰는 XML 은 testcase 마다 file/name/time 을 갖고, 실패면 <failure> 를 낀다.
+          # 한 줄에 하나씩 나오는 형식이 아니라 들여쓰기가 있으므로 상태를 물고 훑는다.
+          for x in "$RUNDIR"/results/*/test-shell.xml; do
+            [ -f "$x" ] || continue
+            i=$(basename "$(dirname "$x")")
+            awk -v shard="$i" '
+              /<testcase/ {
+                name = ""
+                if (match($0, /name="[^"]*"/)) {
+                  name = substr($0, RSTART + 6, RLENGTH - 7)
+                }
+                cur = name; next
+              }
+              /<failure/ && cur != "" { printf "%s\t%s\n", shard, cur; cur = "" }
+              /<\/testcase>/ { cur = "" }
+            ' "$x" >> /tmp/failed.list
+          done
+          n=$(wc -l < /tmp/failed.list)
+          echo "실패 케이스: $n 건"
+          [ "$n" -eq 0 ] || head -30 /tmp/failed.list
+          cp /tmp/failed.list "$RUNDIR/failed.list"
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+
+      - name: 소요시간 갱신 — 다음 run 의 분배가 이것을 쓴다
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+        run: |
+          set -eo pipefail
+          # feedback.log 형식: [OK]:  <케이스 경로> <밀리초> EnvId=...
+          : > /tmp/new_timings.tsv
+          for f in "$RUNDIR"/results/*/feedback.log; do
+            [ -f "$f" ] || continue
+            grep -E '^\[(OK|NOK)\]' "$f" 2>/dev/null | awk '
+              {
+                # 뒤에서부터 EnvId= 앞의 숫자를 찾는다. 경로에 공백이 없다는 전제다.
+                for (i = NF; i > 1; i--) {
+                  if ($i ~ /^EnvId=/) { ms = $(i-1); path = $(i-2); break }
+                }
+                if (ms ~ /^[0-9]+$/ && path != "") printf "%s\t%.3f\n", path, ms / 1000
+              }' >> /tmp/new_timings.tsv
+          done
+          new_n=$(wc -l < /tmp/new_timings.tsv)
+          echo "이번 run 이 잰 것: $new_n 건"
+
+          mkdir -p "$(dirname "$TIMINGS")"
+          [ -f "$TIMINGS" ] || : > "$TIMINGS"
+          old_n=$(wc -l < "$TIMINGS")
+
+          # 새 값이 옛 값을 이긴다. CircleCI 도 최근 값을 쓴다.
+          # 쓰기가 겹치면 안 되므로 임시 파일에 만들고 rename 한 번으로 바꾼다.
+          awk -F'\t' '
+            NR == FNR { t[$1] = $2; next }        # 새 값 먼저 담는다
+            !($1 in t) { t[$1] = $2 }             # 옛 값은 없던 것만 채운다
+            END { for (k in t) printf "%s\t%s\n", k, t[k] }
+          ' /tmp/new_timings.tsv "$TIMINGS" | sort > /tmp/merged.tsv
+
+          mv -f /tmp/merged.tsv "${TIMINGS}.tmp.$$"
+          mv -f "${TIMINGS}.tmp.$$" "$TIMINGS"
+          echo "소요시간 데이터: $old_n -> $(wc -l < "$TIMINGS") 건"
+
+      - name: 검증 ③ + 요약
+        env:
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+          TOTAL: ${{ needs.plan.outputs.total }}
+          TIMED: ${{ needs.plan.outputs.timed }}
+          PLANNED: ${{ steps.gather.outputs.planned }}
+          DONE_N: ${{ steps.gather.outputs.done_n }}
+          EXEC_SUM: ${{ steps.gather.outputs.exec_sum }}
+          SUCC_SUM: ${{ steps.gather.outputs.succ_sum }}
+          FAIL_SUM: ${{ steps.gather.outputs.fail_sum }}
+          SKIP_SUM: ${{ steps.gather.outputs.skip_sum }}
+          FAILED_N: ${{ steps.failures.outputs.n }}
+        run: |
+          set -eo pipefail
+          covered=$((EXEC_SUM + SKIP_SUM))
+          verdict_cov="✅"
+          [ "$covered" -ge "$TOTAL" ] || verdict_cov="❌"
+          verdict_shard="✅"
+          [ "$DONE_N" -eq "$PLANNED" ] || verdict_shard="❌"
+
+          {
+            echo "## S6 — shell suite"
+            echo
+            echo "| 항목 | 값 |"
+            echo "|---|---|"
+            echo "| 대상 케이스 | $TOTAL |"
+            echo "| shard | 계획 $PLANNED / 결과 발행 $DONE_N $verdict_shard |"
+            echo "| 실행 | $EXEC_SUM |"
+            echo "| 건너뜀 | $SKIP_SUM |"
+            echo "| 처리 합계 | $covered / $TOTAL $verdict_cov |"
+            echo "| 성공 | $SUCC_SUM |"
+            echo "| **실패** | **$FAIL_SUM** |"
+            echo "| 분배에 실측 소요시간이 쓰인 케이스 | $TIMED |"
+            echo
+            if [ "$FAILED_N" -gt 0 ]; then
+              echo "### 실패 케이스 ($FAILED_N)"
+              echo
+              echo "출처: 각 shard 의 \`test-shell.xml\` 에서 \`<failure>\` 가 달린 \`<testcase>\`"
+              echo
+              echo "| shard | 케이스 |"
+              echo "|---|---|"
+              head -50 /tmp/failed.list | awk -F'\t' '{printf "| %s | `%s` |\n", $1, $2}'
+              [ "$FAILED_N" -gt 50 ] && echo && echo "_… 그리고 $((FAILED_N - 50)) 건 더. 전체는 \`$RUNDIR/failed.list\`_"
+            else
+              echo "### 실패 케이스 없음"
+            fi
+            echo
+            echo "---"
+            echo "산출물: \`$RUNDIR\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "=== 요약 ==="
+          cat "$GITHUB_STEP_SUMMARY"
+
+          # --- ③ 방지 장치 ---
+          # shard 가 통째로 죽으면 ② 가 못 잡는다. 여기서 잡는다.
+          if [ "$DONE_N" -ne "$PLANNED" ]; then
+            echo "::error::shard $PLANNED 개 중 $DONE_N 개만 결과를 냈다 — 나머지는 통째로 죽었다"
+            exit 1
+          fi
+          if [ "$covered" -lt "$TOTAL" ]; then
+            echo "::error::대상 $TOTAL 건 중 $covered 건만 처리됐다 — 조용히 빠진 케이스가 있다"
+            exit 1
+          fi
+          if [ "$FAIL_SUM" -gt 0 ]; then
+            echo "::error::$FAIL_SUM 건 실패"
+            exit 1
+          fi
+          echo "완주했다. 실패 0."
