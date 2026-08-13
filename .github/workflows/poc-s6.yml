@@ -75,9 +75,17 @@ on:
         required: false
         default: "none"
         type: string
+      pr:
+        description: "실패 목록을 붙일 PR 번호. 비우면 job summary 에만 남긴다"
+        required: false
+        default: ""
+        type: string
 
+# 저장소 기본값은 S4 가 read 로 낮췄다. 여기서 필요한 것만 되돌려 받는다.
+# contents 는 read 그대로다 — 이 워크플로는 저장소에 쓰지 않는다.
 permissions:
   contents: read
+  pull-requests: write
 
 env:
   WORKDIR: /home
@@ -688,6 +696,9 @@ jobs:
 
           echo "=== 요약 ==="
           cat "$GITHUB_STEP_SUMMARY"
+          # 다음 스텝(PR 코멘트)이 같은 내용을 쓴다. summary 파일은 append 전용이라
+          # 뒤 스텝에서 다시 읽을 수 있게 사본을 남긴다.
+          cp "$GITHUB_STEP_SUMMARY" /tmp/summary.md
 
           # --- ③ 방지 장치 ---
           # shard 가 통째로 죽으면 ② 가 못 잡는다. 여기서 잡는다.
@@ -704,3 +715,50 @@ jobs:
             exit 1
           fi
           echo "완주했다. 실패 0."
+
+      - name: PR 에 붙인다 — job summary 는 PR 대화창에 안 보인다
+        # ⚠ always() 다. **실패했을 때야말로 PR 에 알려야 한다.**
+        #   앞 스텝이 exit 1 로 끝나면 기본값으로는 이 스텝이 건너뛰어진다.
+        if: always() && inputs.pr != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          RUNDIR: ${{ needs.plan.outputs.rundir }}
+        run: |
+          set -eo pipefail
+          # CircleCI 는 Tests 탭이 PR 에서 바로 열린다. GHA 의 job summary 는
+          # **run 페이지에만** 있다 — PR 대화창에는 안 나온다.
+          # 그래서 같은 내용을 코멘트로 한 번 더 붙인다.
+          if [[ ! "$PR" =~ ^[0-9]{1,7}$ ]]; then
+            echo "::error::pr 은 정수여야 한다"; exit 1
+          fi
+          if [ ! -f /tmp/summary.md ]; then
+            printf '## S6\n\n요약을 만들지 못했다. run 을 봐라.\n' > /tmp/summary.md
+          fi
+
+          {
+            cat /tmp/summary.md
+            echo
+            echo "<sub>poc-s6 / run [\`${GITHUB_RUN_ID}\`](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) · 산출물 \`${RUNDIR}\`</sub>"
+          } > /tmp/body.md
+
+          # 코멘트 본문은 65536자 상한이 있다. 실패가 많으면 넘칠 수 있어 잘라 둔다.
+          head -c 60000 /tmp/body.md > /tmp/body.trim.md
+          jq -Rs '{body: .}' < /tmp/body.trim.md > /tmp/comment.json
+
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            -d @/tmp/comment.json)
+
+          echo "HTTP $code"
+          if [ "$code" != "201" ]; then
+            # 403 이면 GITHUB_TOKEN 에 pull-requests: write 가 안 온 것이다.
+            # 저장소 기본 권한(S4 가 read 로 낮췄다)이 상한으로 작동하는지가 여기서 갈린다.
+            echo "::error::PR 코멘트 실패"
+            jq -r '.message // .' /tmp/resp.json 2>/dev/null | head -3
+            exit 1
+          fi
+          echo "붙였다: $(jq -r '.html_url' /tmp/resp.json)"
