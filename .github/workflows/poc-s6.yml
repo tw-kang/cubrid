@@ -212,10 +212,12 @@ jobs:
               # 내림차순 정렬을 위해 키를 만든다. 같은 값이면 이름순으로 결정론적이다.
               printf "%015.3f\t%s\n", sec, c
             }
-            END { print timed > "/tmp/timed.count" }
+            # timed 가 한 번도 안 늘면 미정의라 빈 줄이 나간다. +0 으로 0 을 보장한다.
+            END { print timed + 0 > "/tmp/timed.count" }
           ' /tmp/cases.list | sort -rn -k1,1 -k2,2 > /tmp/sorted.tsv
 
           timed=$(cat /tmp/timed.count 2>/dev/null || echo 0)
+          timed=${timed:-0}
           echo "실측값 적용: $timed 건 / 기본값: $((total - timed)) 건"
 
           awk -v par="$PAR" '
@@ -290,6 +292,35 @@ jobs:
           echo "rundir=$rundir" >> "$GITHUB_OUTPUT"
           echo
           echo "발행: $rundir"
+
+      - name: CTP 를 공유 저장소에 한 번만 받는다
+        id: ctp_seed
+        run: |
+          set -eo pipefail
+          # S6a 실측: cubrid-testtools clone 하나가 WAN 25MB 다.
+          # shard 마다 받으면 50 × 25MB = 1.25GB 가 30Mbps 공유 회선을 탄다 (약 5.5분).
+          # plan 이 한 번 받아 GlusterFS 에 두면 shard 는 LAN 으로 복사한다 — WAN 0.
+          # 이관 설계에 그대로 남는 항목이다: CircleCI 는 러너 이미지가 CTP 를 갖고 있지 않아
+          # 같은 문제가 있었고, 우리는 노드 공유 저장소로 푼다.
+          seed="$POC_ROOT/testtools"
+          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+
+          tmp="${seed}.tmp.${GITHUB_RUN_ID}"
+          rm -rf "$tmp"
+          git -c fetch.parallel=0 clone -q --depth 1 --no-tags \
+            https://github.com/CUBRID/cubrid-testtools.git "$tmp"
+          head=$(git -C "$tmp" rev-parse HEAD)
+
+          # rename 하나로 공개한다. 소비자가 반쯤 복사된 트리를 보는 일이 없다.
+          rm -rf "${seed}.old"
+          [ -d "$seed" ] && mv -T "$seed" "${seed}.old"
+          mv -T "$tmp" "$seed"
+          rm -rf "${seed}.old"
+
+          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+          echo "CTP seed: $seed @ $head"
+          echo "이 clone 의 WAN: $(( (rx1 - rx0) / 1048576 )) MB (shard 는 0 이다)"
+          du -sh "$seed"
 
       - name: 분배 요약
         run: |
@@ -370,11 +401,19 @@ jobs:
             -o lowerdir="$lower",upperdir=/build-rw/upper,workdir=/build-rw/work "$CUBRID_DIR"
           echo "테스트케이스 + CUBRID 마운트됨"
 
-      - name: CTP 준비
+      - name: CTP 준비 — plan 이 받아 둔 것을 LAN 으로 복사한다
         run: |
           set -eo pipefail
-          git -c fetch.parallel=0 clone -q --depth 1 --no-tags \
-            https://github.com/CUBRID/cubrid-testtools.git "$WORKDIR/cubrid-testtools"
+          seed="$POC_ROOT/testtools"
+          [ -d "$seed" ] || { echo "::error::CTP seed 가 없다: $seed"; exit 1; }
+
+          # GlusterFS 는 LAN 이다. 여기서 WAN 을 쓰지 않는다 (S6a 실측: clone 하나가 25MB).
+          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+          cp -a "$seed" "$WORKDIR/cubrid-testtools"
+          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+          echo "CTP 복사 WAN: $(( (rx1 - rx0) / 1048576 )) MB (0 이어야 한다)"
+          ls "$CTP_HOME/bin/ctp.sh" "$CTP_HOME/conf/shell_ci.conf"
+
           sudo /usr/sbin/sshd || /usr/sbin/sshd || true
 
       - name: 내 몫만 남긴다
