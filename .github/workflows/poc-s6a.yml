@@ -1,0 +1,355 @@
+# PROTOTYPE — CUBRIDQA-1503 / S6a.  THROWAWAY.  답이 티켓에 들어가면 지운다.
+#
+# 질문: 운영 test_shell 의 저장 구조를 ARC job pod 에서 재현할 수 있나.
+#       그리고 그 위에서 CTP 가 실제로 도는가.
+#
+# 이것이 S6 전체를 가르는 가정이다. 안 되면 분배·수집을 설계할 이유가 없다.
+# 그래서 케이스를 몇 개로 줄여 가장 위험한 것만 먼저 깬다.
+#
+# 두는 곳: fork(tw-kang/cubrid)의 *기본 브랜치* `cubridqa-1503` 의
+#   .github/workflows/poc-s6a.yml
+#
+# 실행:
+#   gh workflow run poc-s6a.yml --repo tw-kang/cubrid -f cases=5
+#
+# --- 깨야 할 가정 넷 ---
+#
+#   A1. pod template 의 securityContext.privileged 가 job pod 에 병합되는가.
+#       ARC 훅이 어떤 필드를 존중하는지 문서에 없다. 실물로 확인한다.
+#   A2. privileged 면 job step 에서 mount -t overlay 가 되는가.
+#   A3. test_shell 이미지가 job container 로 뜨는가.
+#       이 이미지는 ENTRYPOINT 가 /entrypoint.sh 다. 훅이 그것을 덮어써야 한다.
+#   A4. 그 위에서 CTP 가 돌아 JUnit XML 과 test_status.data 를 내는가.
+#
+# --- 운영과 일부러 다르게 한 것 ---
+#
+# 1. **테스트케이스를 fetch 하지 않는다.**
+#    운영 entrypoint 는 checkout 에서 git fetch --depth 1 && git reset --hard 를 한다.
+#    그러려면 private 저장소 토큰(GHI_TOKEN)이 fork 에 있어야 한다.
+#    노드의 seed(/home/tc-repo)가 2026-07-27 로 2주만 낡았다. S6 의 질문은
+#    분배·수집·완주이지 최신 테스트케이스가 아니다. **seed 를 그대로 쓴다.**
+#    얻는 것: private 토큰 불필요, WAN 0.
+#
+# 2. **마운트를 job step 에서 한다.** postStart 가 아니다.
+#    실패가 워크플로 로그에 그대로 남는다. pod template 주석 참조.
+
+name: poc-s6a
+
+on:
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: "남길 케이스 수 (CTP 가 실제로 돌릴 수). 1..50"
+        required: false
+        default: "5"
+        type: string
+      sha:
+        description: "빌드 SHA. 비우면 build-cache 에서 가장 최근 debug 빌드를 고른다"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: 저장 구조 재현 + CTP 최소 실행
+    runs-on: cubridqa-1503-poc
+    timeout-minutes: 60
+
+    container:
+      image: cubridci/cubridci:test_shell
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      # 이미지 ENV 에 이미 있는 값들이다. 여기서 다시 적는 것은 이 워크플로가
+      # 무엇에 기대는지 드러내기 위해서다. 이미지가 바뀌면 여기서 갈린다.
+      WORKDIR: /home
+      TC_DIR: /home/cubrid-testcases-private-ex
+      CUBRID_DIR: /home/CUBRID
+      BUILD_ROOT: /home/build-cache/builds
+      POC_ROOT: /home/build-cache/poc-1503
+
+    steps:
+      # ---------------------------------------------------------------
+      - name: A1. 정체와 권한 — privileged 가 병합됐나
+        run: |
+          set -eo pipefail
+          echo "=== 정체 ==="
+          echo "job pod   : $(hostname)"
+          echo "runner    : ${RUNNER_NAME:-(없음)}"
+          echo "uid/gid   : $(id)"
+          echo "이미지    : $(cat /etc/redhat-release 2>/dev/null || echo '?')"
+          echo "workspace : $GITHUB_WORKSPACE"
+
+          echo
+          echo "=== privileged 판정 ==="
+          # privileged 컨테이너는 CapEff 가 전부 1 이다. 아니면 제한된 집합이다.
+          capeff=$(awk '/^CapEff/ {print $2}' /proc/self/status)
+          echo "CapEff: $capeff"
+          # CAP_SYS_ADMIN(21) 이 있어야 mount 가 된다.
+          if [ "$capeff" = "0000003fffffffff" ] || [ "$capeff" = "000001ffffffffff" ]; then
+            echo "판정: privileged (전체 capability)"
+          else
+            echo "판정: privileged 아님 — mount 가 막힐 것이다"
+          fi
+          echo "seccomp: $(awk '/^Seccomp:/ {print $2}' /proc/self/status)"
+
+          echo
+          echo "=== 마운트 대상 ==="
+          for d in /ro /rw /build-rw /home/build-cache; do
+            if [ -d "$d" ]; then
+              echo "$d : 있다 ($(stat -c '%U:%G %a' "$d"))"
+            else
+              echo "$d : ::error::없다 — pod template 이 적용되지 않았다"
+            fi
+          done
+
+          echo
+          echo "=== /ro seed ==="
+          ls -ld /ro
+          git -C /ro log -1 --format='%H %ci %s' 2>&1 | head -2 || echo "(git 정보 없음)"
+          echo "shell 카테고리: $(ls /ro/shell 2>/dev/null | wc -l) 개"
+
+          echo
+          echo "=== /rw (tmpfs 여야 한다) ==="
+          df -h /rw /build-rw 2>&1 | head -5
+          echo
+          mount | grep -E ' /rw | /build-rw ' || echo "(마운트 정보 없음)"
+
+      # ---------------------------------------------------------------
+      - name: A2. 빌드 고르기
+        id: build
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          set -eo pipefail
+          # 입력을 셸 본문에 박지 않는다. env 로 받는다 (S4 의 규칙).
+          if [ -n "$INPUT_SHA" ]; then
+            if [[ ! "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::sha 는 소문자 40자 hex 여야 한다"
+              exit 1
+            fi
+            sha="$INPUT_SHA"
+          else
+            # 가장 최근에 발행된 debug 빌드를 고른다. 운영이 발행한 것을 읽기만 한다.
+            sha=$(find "$BUILD_ROOT" -mindepth 2 -maxdepth 2 -type d -name debug -printf '%T@ %h\n' 2>/dev/null \
+                  | sort -rn | head -1 | awk '{print $2}' | xargs -r basename)
+          fi
+
+          if [ -z "$sha" ]; then
+            echo "::error::발행된 빌드를 찾지 못했다: $BUILD_ROOT"
+            ls -la "$BUILD_ROOT" 2>&1 | head -20
+            exit 1
+          fi
+
+          lower="$BUILD_ROOT/$sha/debug/CUBRID"
+          if [ ! -d "$lower" ]; then
+            echo "::error::빌드 디렉토리가 없다: $lower"
+            exit 1
+          fi
+
+          echo "SHA        : $sha"
+          echo "lowerdir   : $lower"
+          echo "크기       : $(du -sh "$lower" 2>/dev/null | cut -f1)"
+          echo "발행 시각  : $(stat -c '%y' "$BUILD_ROOT/$sha/debug")"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "lower=$lower" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      - name: A3. overlay 두 개를 건다 — 여기가 S6 의 관문이다
+        env:
+          LOWER_CUBRID: ${{ steps.build.outputs.lower }}
+        run: |
+          set -eo pipefail
+
+          echo "=== 1) 테스트케이스 overlay ==="
+          # lowerdir 는 노드의 읽기 전용 seed 다. 절대 쓰지 않는다.
+          # upperdir 가 tmpfs 라 CTP 가 만드는 파일이 메모리에 머문다. pod 가 끝나면 사라진다.
+          mkdir -p /rw/upper /rw/work "$TC_DIR"
+          mount -t overlay overlay \
+            -o lowerdir=/ro,upperdir=/rw/upper,workdir=/rw/work \
+            "$TC_DIR"
+          echo "마운트됨: $TC_DIR"
+          ls "$TC_DIR" | head -5
+          echo "shell 케이스 총수: $(find "$TC_DIR/shell" -path '*/cases/*.sh' 2>/dev/null | grep -Pc '/([^/]+)/cases/\1\.sh$' || echo 0)"
+
+          echo
+          echo "=== 2) CUBRID overlay ==="
+          # 운영 발행물을 lowerdir 로 읽기만 한다. 테스트가 만드는 것은 전부 upperdir 로 간다.
+          # 이 upperdir 는 tmpfs 가 아니다 — 서버를 띄우면 databases/ 가 커진다.
+          mkdir -p /build-rw/upper /build-rw/work "$CUBRID_DIR"
+          mount -t overlay overlay \
+            -o lowerdir="$LOWER_CUBRID",upperdir=/build-rw/upper,workdir=/build-rw/work \
+            "$CUBRID_DIR"
+          echo "마운트됨: $CUBRID_DIR"
+          ls "$CUBRID_DIR" | head -10
+
+          echo
+          echo "=== 확인 ==="
+          mount | grep overlay | grep -vE 'on / type' || true
+          echo
+          echo "쓰기 시험 (lowerdir 가 오염되지 않아야 한다):"
+          touch "$TC_DIR/.s6a-write-probe"
+          test -f /rw/upper/.s6a-write-probe && echo "  케이스 쓰기 -> upperdir 로 갔다 (정상)"
+          test ! -e /ro/.s6a-write-probe && echo "  /ro 는 그대로다 (정상)"
+          rm -f "$TC_DIR/.s6a-write-probe"
+
+      # ---------------------------------------------------------------
+      - name: A4. CTP 준비 — testtools 는 public 이라 토큰이 없어도 된다
+        run: |
+          set -eo pipefail
+          cd "$WORKDIR"
+
+          # cubrid-testtools 는 public 저장소다. depth 1 이면 작다.
+          # 테스트케이스와 달리 노드에 seed 가 없어 이것만 WAN 을 쓴다.
+          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+
+          git -c fetch.parallel=0 clone -q --depth 1 --no-tags \
+            https://github.com/CUBRID/cubrid-testtools.git "$WORKDIR/cubrid-testtools"
+
+          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") rx+=$2} END {print rx+0}' /proc/net/dev)
+          echo "testtools clone WAN: $(( (rx1 - rx0) / 1048576 )) MB"
+          echo "CTP_HOME: $CTP_HOME"
+          ls "$CTP_HOME/bin/ctp.sh" "$CTP_HOME/conf/shell_ci.conf"
+
+          # CTP 가 로컬 실행 모드로 돌더라도 sshd 를 띄워 둔다.
+          # 운영 entrypoint 의 configure() 가 하는 일과 같다.
+          sudo /usr/sbin/sshd || /usr/sbin/sshd || true
+          echo "sshd: $(pgrep -c sshd || echo 0) 프로세스"
+
+      # ---------------------------------------------------------------
+      - name: A5. 케이스를 몇 개로 줄인다
+        id: pick
+        env:
+          INPUT_CASES: ${{ inputs.cases }}
+        run: |
+          set -eo pipefail
+          if [[ ! "$INPUT_CASES" =~ ^[0-9]{1,2}$ ]] || [ "$INPUT_CASES" -lt 1 ] || [ "$INPUT_CASES" -gt 50 ]; then
+            echo "::error::cases 는 1..50 의 정수여야 한다"
+            exit 1
+          fi
+
+          cd "$WORKDIR"
+          # 운영과 같은 제외를 먼저 한다.
+          rm -rf "$TC_DIR/shell/_25_unstable"
+
+          # 운영 config.yml 과 같은 glob + 필터다.
+          #   shell/**/<name>/cases/<name>.sh 만 케이스로 본다.
+          find "$TC_DIR/shell" -path '*/cases/*.sh' 2>/dev/null \
+            | grep -P '/([^/]+)/cases/\1\.sh$' \
+            | sort > /tmp/all_cases.list
+          total=$(wc -l < /tmp/all_cases.list)
+          echo "전체 케이스: $total"
+
+          # 짧고 안정적인 것부터 고른다. _01_utility 는 서버 기동만 하면 도는 것이 많다.
+          grep '/_01_utility/' /tmp/all_cases.list | head -"$INPUT_CASES" > /tmp/keep.list || true
+          # 모자라면 아무거나 채운다.
+          if [ "$(wc -l < /tmp/keep.list)" -lt "$INPUT_CASES" ]; then
+            head -"$INPUT_CASES" /tmp/all_cases.list > /tmp/keep.list
+          fi
+
+          echo "고른 케이스:"
+          cat /tmp/keep.list
+          echo "keep=$(wc -l < /tmp/keep.list)" >> "$GITHUB_OUTPUT"
+
+          # 운영과 같은 방식으로 나머지를 지운다. overlay upperdir 에 whiteout 이 쌓인다.
+          xargs -n1 dirname < /tmp/keep.list > /tmp/keep_dirs.list
+          echo "지우는 중..."
+          find "$TC_DIR/shell" -name cases -type d \
+            | grep -v -F -f /tmp/keep_dirs.list \
+            | xargs -r rm -rf
+          left=$(find "$TC_DIR/shell" -path '*/cases/*.sh' 2>/dev/null | grep -Pc '/([^/]+)/cases/\1\.sh$' || echo 0)
+          echo "남은 케이스: $left"
+          echo "/rw 사용량: $(df -h /rw | tail -1)"
+
+      # ---------------------------------------------------------------
+      - name: A6. CTP 실행
+        id: ctp
+        run: |
+          set -eo pipefail
+          ulimit -c 10485760
+
+          echo "=== CUBRID 확인 ==="
+          "$CUBRID_DIR/bin/cubrid" --version 2>&1 | head -3 || echo "(버전 조회 실패)"
+
+          echo
+          echo "=== CTP 시작 ==="
+          set +e
+          ( cd "$CTP_HOME" && HOME="$WORKDIR" ./bin/ctp.sh shell -c "$CTP_HOME/conf/shell_ci.conf" )
+          rc=$?
+          set -e
+          echo "ctp exit: $rc"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      - name: A7. 산출물 확인 — 분배·수집이 무엇을 딛고 설지
+        if: always()
+        run: |
+          set -eo pipefail
+          logs="$CTP_HOME/result/shell/current_runtime_logs"
+          if [ ! -d "$logs" ]; then
+            echo "::error::CTP 결과 디렉토리가 없다: $logs"
+            exit 1
+          fi
+
+          echo "=== 결과 디렉토리 ==="
+          ls -la "$(readlink -f "$logs")"
+
+          echo
+          echo "=== test_status.data ==="
+          cat "$logs/test_status.data" 2>&1 || echo "(없다)"
+
+          echo
+          echo "=== JUnit XML ==="
+          xml="$logs/test-shell.xml"
+          if [ -f "$xml" ]; then
+            echo "크기: $(stat -c%s "$xml") 바이트"
+            echo "testcase 수: $(grep -c '<testcase' "$xml" || echo 0)"
+            echo "failure 수 : $(grep -c '<failure' "$xml" || echo 0)"
+            echo
+            echo "--- 앞 40줄 ---"
+            head -40 "$xml"
+          else
+            echo "::error::JUnit XML 이 없다 — 수집 설계의 근거가 사라진다"
+          fi
+
+          echo
+          echo "=== feedback.log 의 소요시간 줄 ==="
+          grep -E '^\[(OK|NOK)\]' "$logs/feedback.log" 2>/dev/null | head -10 || echo "(없다)"
+
+          echo
+          echo "=== PoC 영역에 보존 ==="
+          # pod 가 끝나면 tmpfs 가 사라진다. 뒤에서 볼 수 있게 gluster 로 옮긴다.
+          out="$POC_ROOT/s6a/${GITHUB_RUN_ID}"
+          mkdir -p "$out"
+          cp -a "$(readlink -f "$logs")"/. "$out/" 2>/dev/null || true
+          echo "저장: $out"
+          ls -la "$out" | head
+
+      # ---------------------------------------------------------------
+      - name: A8. 판정
+        if: always()
+        run: |
+          set -eo pipefail
+          logs="$CTP_HOME/result/shell/current_runtime_logs"
+          xml="$logs/test-shell.xml"
+
+          {
+            echo "## S6a — 저장 구조 재현 판정"
+            echo
+            echo "| 가정 | 결과 |"
+            echo "|---|---|"
+            echo "| A1 privileged 병합 | $( [ "$(awk '/^CapEff/ {print $2}' /proc/self/status)" != "00000000a80425fb" ] && echo '✅ 됐다' || echo '❌ 안 됐다' ) |"
+            echo "| A2 overlay 마운트 | $( mount | grep -q "overlay on $TC_DIR" && echo '✅ 됐다' || echo '❌ 안 됐다' ) |"
+            echo "| A3 test_shell 이미지 | ✅ 됐다 (이 스텝이 도는 것이 증거다) |"
+            echo "| A4 CTP JUnit XML | $( [ -f "$xml" ] && echo "✅ 됐다 ($(grep -c '<testcase' "$xml" || echo 0) testcase)" || echo '❌ 안 됐다' ) |"
+            echo
+            echo "케이스 $( [ -f "$logs/test_status.data" ] && grep -E 'total_(case|success|fail)_count' "$logs/test_status.data" | tr '\n' ' ' || echo '(상태 없음)' )"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat "$GITHUB_STEP_SUMMARY"
