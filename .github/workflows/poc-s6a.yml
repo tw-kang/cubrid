@@ -100,6 +100,22 @@ jobs:
           echo "seccomp: $(awk '/^Seccomp:/ {print $2}' /proc/self/status)"
 
           echo
+          echo "=== PID 1 — 좀비를 거두는 자가 있나 ==="
+          # ARC 훅은 job container 를 `tail -f /dev/null` 로 띄운다. tail 은 wait(2) 를
+          # 하지 않아 고아가 된 자식이 좀비로 영원히 남는다. CUBRID 서버는 데몬이라
+          # double fork 로 떠 PPID 가 1 이다 — 끝나면 좀비가 되고 cub_master 가 그것을
+          # 감지하지 못해 `cubrid server stop` 이 무한 대기한다. 2026-08-13 실측.
+          # pod template 의 shareProcessNamespace: true 가 PID 1 을 /pause 로 바꾼다.
+          ps -p 1 -o pid,comm,args --no-headers
+          pid1=$(ps -p 1 -o comm= | tr -d ' ')
+          if [ "$pid1" = "pause" ]; then
+            echo "판정: /pause 다 — 좀비를 거둔다 (shareProcessNamespace 가 먹었다)"
+          else
+            echo "::warning::PID 1 이 '$pid1' 다. 좀비를 거두지 않으면 CTP 가 멈춘다"
+          fi
+          echo "지금 좀비 수: $(ps -eo stat= | grep -c Z || echo 0)"
+
+          echo
           echo "=== 마운트 대상 ==="
           for d in /ro /rw /build-rw /home/build-cache; do
             if [ -d "$d" ]; then
@@ -348,6 +364,8 @@ jobs:
             echo "| A2 overlay 마운트 | $( mount | grep -q "overlay on $TC_DIR" && echo '✅ 됐다' || echo '❌ 안 됐다' ) |"
             echo "| A3 test_shell 이미지 | ✅ 됐다 (이 스텝이 도는 것이 증거다) |"
             echo "| A4 CTP JUnit XML | $( [ -f "$xml" ] && echo "✅ 됐다 ($(grep -c '<testcase' "$xml" || echo 0) testcase)" || echo '❌ 안 됐다' ) |"
+            echo "| A5 PID 1 이 좀비를 거두나 | $( [ "$(ps -p 1 -o comm=| tr -d ' ')" = "pause" ] && echo '✅ /pause' || echo "❌ $(ps -p 1 -o comm= | tr -d ' ')" ) |"
+            echo "| 남은 좀비 | $(ps -eo stat= | grep -c Z || echo 0) |"
             echo
             echo "케이스 $( [ -f "$logs/test_status.data" ] && grep -E 'total_(case|success|fail)_count' "$logs/test_status.data" | tr '\n' ' ' || echo '(상태 없음)' )"
           } >> "$GITHUB_STEP_SUMMARY"
