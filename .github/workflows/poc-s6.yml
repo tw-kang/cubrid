@@ -590,11 +590,16 @@ jobs:
             i=$(basename "$(dirname "$x")")
             awk -v shard="$i" '
               /<testcase/ {
-                name = ""
-                if (match($0, /name="[^"]*"/)) {
-                  name = substr($0, RSTART + 6, RLENGTH - 7)
+                cur = ""
+                # ⚠ 앞의 공백을 반드시 요구한다. CTP 가 쓰는 줄은
+                #   <testcase classname="https://…" name="shell/…" file="…" time="…">
+                # 이고 classname 이 name 보다 앞에 온다. / name="…"/ 가 아니라
+                # /name="…"/ 로 찾으면 **classname 에 먼저 걸려 URL 을 뽑는다.**
+                # 2026-08-13 전체 run 에서 실물로 겪었다.
+                if (match($0, / name="[^"]*"/)) {
+                  cur = substr($0, RSTART + 7, RLENGTH - 8)
                 }
-                cur = name; next
+                next
               }
               /<failure/ && cur != "" { printf "%s\t%s\n", shard, cur; cur = "" }
               /<\/testcase>/ { cur = "" }
