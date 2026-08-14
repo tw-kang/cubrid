@@ -96,6 +96,14 @@ permissions:
   contents: read
   pull-requests: write
 
+# 발행(옛것 비키기 → 새것 들이기)과 CTP seed 교체가 각각 여러 단계다.
+# run 두 개가 겹치면 그 사이가 깨진다. 순차로 돌린다.
+# 캠페인이 어차피 순차라 대가가 없다 — 러너가 희소 자원이라 겹쳐 쏠 일도 없다.
+# ⚠ 대기 중인 run 이 있는데 또 쏘면 대기하던 것이 취소된다 (GitHub 동작).
+concurrency:
+  group: poc-1526
+  cancel-in-progress: false
+
 env:
   # 발행 경로는 운영 builds/ 가 아니다. 거기에 쓰면 운영 test_shell 이 이것을 먹는다.
   POC_ROOT: /home/build-cache/poc-1503
@@ -300,14 +308,28 @@ jobs:
             # 절반만 쓰인 트리 위에 나타나는 일이 없다.
             touch "$tmp/$BUILD_SENTINEL"
 
-            # rename 하나로 공개된다. 소비자가 반쯤 복사된 트리를 보는 일이 없다.
-            if ! mv -T "$tmp" "$dir"; then
-              rm -rf "$tmp"
-              # 먼저 발행한 run 만 무시해도 된다. 그것은 sentinel 을 남긴다.
-              # 그 밖의 mv 실패는 아무것도 발행하지 않은 것이므로 여기서 실패한다.
-              test -f "$dir/$BUILD_SENTINEL"
-              echo "::warning::다른 run 이 먼저 발행했다"
+            # ⚠ rename(2) 는 **비어 있지 않은 디렉토리를 덮어쓰지 못한다** (EEXIST).
+            # 그래서 `mv -T "$tmp" "$dir"` 한 번으로는 force_build 가 성립하지 않는다.
+            # 2026-08-14 run 31764174553 에서 실물로 걸렸다 — 빌드는 4분 걸려 성공했는데
+            # 발행이 "File exists" 로 죽었다. S3 은 늘 새 SHA 에 발행해 안 걸렸다.
+            #
+            # 옛것을 원자적으로 비켜 놓고, 새것을 원자적으로 들여놓는다. 둘 다 rename 이다.
+            # 그 사이 $dir 이 잠깐 **없다**. 이것은 "절반만 쓰인 것"과 다르다 —
+            # 없는 것은 plan 이 sentinel 검사로 즉시 잡는다. 겹치는 run 은 concurrency 가 막는다.
+            old="${dir}.old.${GITHUB_RUN_ID}"
+            rm -rf "$old"
+            if [ -e "$dir" ]; then
+              mv -T "$dir" "$old" || {
+                rm -rf "$tmp"
+                echo "::error::옛 발행물을 비켜 놓지 못했다: $dir"; exit 1; }
             fi
+            if ! mv -T "$tmp" "$dir"; then
+              # 되돌린다. 옛것이라도 남아 있는 편이 아무것도 없는 것보다 낫다.
+              [ -e "$old" ] && mv -T "$old" "$dir"
+              rm -rf "$tmp"
+              echo "::error::새 발행물을 들여놓지 못했다: $dir"; exit 1
+            fi
+            rm -rf "$old"
           fi
 
           # --- 발행물이 이 파이프라인의 계약을 지키는지 확인한다 ---
