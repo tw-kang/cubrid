@@ -96,6 +96,11 @@ on:
         required: false
         default: "0"
         type: string
+      rerun_from:
+        description: "이 run id 의 실패 케이스만 다시 돌린다. 비우면 전체. limit 보다 우선한다"
+        required: false
+        default: ""
+        type: string
       sabotage:
         description: "분배 실패 방지 장치 시험. none | empty-shard | lose-shard"
         required: false
@@ -421,6 +426,7 @@ jobs:
           IN_PAR: ${{ inputs.parallelism }}
           IN_LIMIT: ${{ inputs.limit }}
           IN_SAB: ${{ inputs.sabotage }}
+          IN_RERUN: ${{ inputs.rerun_from }}
         run: |
           set -eo pipefail
           # 입력을 셸 본문에 박지 않는다. env 로 받는다 (S4 의 규칙).
@@ -434,7 +440,10 @@ jobs:
             none|empty-shard|lose-shard) ;;
             *) echo "::error::sabotage 는 none|empty-shard|lose-shard 여야 한다"; exit 1 ;;
           esac
-          echo "parallelism=$IN_PAR / limit=$IN_LIMIT / sabotage=$IN_SAB"
+          if [ -n "$IN_RERUN" ] && [[ ! "$IN_RERUN" =~ ^[0-9]{1,20}$ ]]; then
+            echo "::error::rerun_from 은 run id (정수) 여야 한다"; exit 1
+          fi
+          echo "parallelism=$IN_PAR / limit=$IN_LIMIT / sabotage=$IN_SAB / rerun_from=${IN_RERUN:-(없음)}"
           echo "par=$IN_PAR" >> "$GITHUB_OUTPUT"
           echo "limit=$IN_LIMIT" >> "$GITHUB_OUTPUT"
 
@@ -556,6 +565,7 @@ jobs:
           PAR: ${{ steps.args.outputs.par }}
           LIMIT: ${{ steps.args.outputs.limit }}
           SABOTAGE: ${{ inputs.sabotage }}
+          RERUN_FROM: ${{ inputs.rerun_from }}
         run: |
           set -eo pipefail
 
@@ -569,7 +579,23 @@ jobs:
             | grep -P '/([^/]+)/cases/\1\.sh$' \
             | sed "s#^$TC_DIR/#cubrid-testcases-private-ex/#" \
             | sort > /tmp/all.list
-          if [ "$LIMIT" -gt 0 ]; then
+          # --- 실패만 재실행 (CUBRIDQA-1522 의 자리) ---
+          # 앞선 run 이 failed.list 를 남긴다. 그것을 그대로 입력으로 받는다.
+          # 형식은 <shard>\t<shell/...> 이고 all.list 는 접두사가 붙어 있어 맞춰 준다.
+          if [ -n "$RERUN_FROM" ]; then
+            src="$POC_ROOT/runs/$RERUN_FROM/failed.list"
+            [ -f "$src" ] || { echo "::error::failed.list 가 없다: $src"; exit 1; }
+            cut -f2 "$src" | sed 's#^#cubrid-testcases-private-ex/#' | sort -u > /tmp/want.list
+            want=$(wc -l < /tmp/want.list)
+            # 지금 트리에 있는 것만 남긴다. 그사이 지워진 케이스는 뺀다.
+            grep -xF -f /tmp/want.list /tmp/all.list > /tmp/cases.list || : > /tmp/cases.list
+            got=$(wc -l < /tmp/cases.list)
+            echo "재실행 대상: run $RERUN_FROM 의 실패 $want 건 중 현재 트리에 있는 $got 건"
+            if [ "$got" -ne "$want" ]; then
+              echo "::warning::$((want - got)) 건은 지금 트리에 없다 (지워졌거나 이름이 바뀌었다)"
+              comm -23 /tmp/want.list <(sort /tmp/cases.list) | sed 's/^/  없음: /'
+            fi
+          elif [ "$LIMIT" -gt 0 ]; then
             head -"$LIMIT" /tmp/all.list > /tmp/cases.list
           else
             cp /tmp/all.list /tmp/cases.list
