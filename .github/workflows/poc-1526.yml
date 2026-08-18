@@ -481,7 +481,10 @@ jobs:
         with:
           app-id: ${{ secrets.TC_APP_ID }}
           private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
-          repositories: cubrid-testcases-private-ex,cubrid-testtools
+          # ⚠ private repo 하나만 요청한다. App 설치 범위에 cubrid-testtools 가 없어
+          # 그것을 함께 요청하면 "Not Found" 로 토큰 발급 자체가 실패한다 (2026-08-18 실측).
+          # testtools 는 공개 저장소라 이 토큰으로도 읽힌다 — 설치 범위 밖이어도 공개 읽기는 된다.
+          repositories: cubrid-testcases-private-ex
           owner: CUBRID
 
       - name: 토큰 마스킹
@@ -874,7 +877,10 @@ jobs:
         with:
           app-id: ${{ secrets.TC_APP_ID }}
           private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
-          repositories: cubrid-testcases-private-ex,cubrid-testtools
+          # ⚠ private repo 하나만 요청한다. App 설치 범위에 cubrid-testtools 가 없어
+          # 그것을 함께 요청하면 "Not Found" 로 토큰 발급 자체가 실패한다 (2026-08-18 실측).
+          # testtools 는 공개 저장소라 이 토큰으로도 읽힌다 — 설치 범위 밖이어도 공개 읽기는 된다.
+          repositories: cubrid-testcases-private-ex
           owner: CUBRID
 
       - name: 토큰 마스킹
