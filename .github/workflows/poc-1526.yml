@@ -47,6 +47,23 @@
 #   * CIRCLE_NODE_INDEX 를 shard 번호로 넘긴다 (CTP 가 읽는 유일한 CircleCI 변수)
 #   * 실패 목록 파싱은 ` name="` — 앞의 공백이 필수다. classname 에 먼저 걸린다
 #
+# --- 테스트케이스는 매 run 최신화한다 ---
+#
+#   운영 test_shell 이 노드마다 `/entrypoint.sh checkout` 을 부르는 것과 같다.
+#   노드 seed(overlay lowerdir) 위에 fetch --depth 1 + reset --hard 로 증분만 올린다.
+#
+#   어느 브랜치인가 — **엔진 PR 번호가 engine 과 tc 를 잇는 키다.**
+#     pr 입력 있음 -> tc/pr-<번호>   (sync bot 이 PR 열릴 때 만든다. 없으면 develop 으로 폴백)
+#     pr 입력 없음 -> develop
+#   운영 config.yml 도 같은 규칙이다 (CIRCLE_BRANCH 가 pull/* 면 tc/pr-<번호>).
+#
+#   plan 이 한 번 정하고 **커밋 SHA 로 못 박아** shard 에 넘긴다. 브랜치는 움직이는
+#   표적이라, plan 이 나눈 목록과 shard 가 가진 케이스가 어긋나면 조용히 빠진다.
+#   운영에는 없는 안전장치다 — 운영은 50 노드에 브랜치 이름을 나눠 준다.
+#
+#   자격증명은 이 저장소가 이미 쓰는 GitHub App 이다 (TC_APP_ID / TC_APP_PRIVATE_KEY).
+#   tc-branch-sync·tc-merge-gate·tc-branch-finalize 가 같은 것을 쓴다.
+#
 # --- pod template 에 걸린 전제 둘. 워크플로가 못 고친다 ---
 #
 #   shareProcessNamespace: true   없으면 shell 테스트가 실패가 아니라 **정지**한다.
@@ -85,7 +102,7 @@ on:
         default: "none"
         type: string
       pr:
-        description: "결과를 붙일 PR 번호. 비우면 job summary 에만 남긴다"
+        description: "엔진 PR 번호. 테스트케이스는 tc/pr-<번호> 를 쓰고 결과도 그 PR 에 붙인다. 비우면 develop"
         required: false
         default: ""
         type: string
@@ -394,6 +411,8 @@ jobs:
       sha: ${{ needs.build_debug.outputs.sha }}
       timed: ${{ steps.split.outputs.timed }}
       build_run_id: ${{ steps.build.outputs.build_run_id }}
+      tc_sha: ${{ steps.tc.outputs.tc_sha }}
+      tc_branch: ${{ steps.tc.outputs.tc_branch }}
 
     steps:
       - name: 입력 검사
@@ -452,6 +471,82 @@ jobs:
           echo "발행 시각: $(stat -c '%y' "$dir")"
           echo "build_run_id=$brid" >> "$GITHUB_OUTPUT"
 
+      # private 저장소를 읽으려면 자격증명이 필요하다. 이 저장소가 이미 쓰는 방식을
+      # 그대로 쓴다 — tc-branch-sync·tc-merge-gate·tc-branch-finalize 가 같은 App 이다.
+      # PAT 이 아니라 1시간짜리 단명 토큰이고 repo 2개로 범위가 좁다.
+      # secret 은 fork 와 본 repo 양쪽에 이미 있어 새로 만들 것이 없다.
+      - name: GitHub App 토큰
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.TC_APP_ID }}
+          private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
+          repositories: cubrid-testcases-private-ex,cubrid-testtools
+          owner: CUBRID
+
+      - name: 토큰 마스킹
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "::add-mask::$APP_TOKEN"
+
+      # ---------------------------------------------------------------
+      - name: 테스트케이스 최신화 — 여기서 한 번만 정한다
+        id: tc
+        env:
+          GHI_TOKEN: ${{ steps.app-token.outputs.token }}
+          INPUT_PR: ${{ inputs.pr }}
+        run: |
+          set -eo pipefail
+          # --- overlay 를 먼저 깐다. checkout 이 이 위에 증분을 올린다 ---
+          # 노드 seed(/ro)가 lowerdir 다. entrypoint 의 clone_repository 가
+          # `.git` 을 보고 fetch+reset 경로를 탄다 — 통째로 clone 하지 않는다.
+          mkdir -p /rw/upper /rw/work "$TC_DIR"
+          mount -t overlay overlay -o lowerdir=/ro,upperdir=/rw/upper,workdir=/rw/work "$TC_DIR"
+          echo "seed HEAD : $(git -C "$TC_DIR" log -1 --format='%h %ci' 2>/dev/null)"
+
+          # entrypoint 의 configure() 와 같은 설정. ls-remote 를 먼저 하려면 필요하다.
+          git config --global url."https://x-access-token:${GHI_TOKEN}@github.com/".insteadof https://github.com/
+
+          # --- 어느 테스트케이스 브랜치인가 ---
+          # 엔진 PR 번호가 engine 과 tc 를 잇는 키다. sync bot 이 PR 이 열릴 때
+          # tc/pr-<N> 을 만든다. 운영 config.yml 도 같은 규칙이다
+          # (CIRCLE_BRANCH 가 pull/* 면 tc/pr-<번호>, 아니면 develop).
+          TC_REPO=https://github.com/CUBRID/cubrid-testcases-private-ex.git
+          if [ -n "$INPUT_PR" ]; then
+            if [[ ! "$INPUT_PR" =~ ^[0-9]{1,7}$ ]]; then
+              echo "::error::pr 은 정수여야 한다"; exit 1
+            fi
+            TC_BRANCH="tc/pr-${INPUT_PR}"
+          else
+            TC_BRANCH=develop
+          fi
+
+          # 없을 수 있다 — sync bot 이 생기기 전에 열린 PR 등. develop 으로 떨어진다.
+          if ! git ls-remote --exit-code --heads "$TC_REPO" "$TC_BRANCH" >/dev/null 2>&1; then
+            echo "::warning::$TC_BRANCH 가 없다 — develop 으로 간다"
+            TC_BRANCH=develop
+          fi
+          echo "tc 브랜치 : $TC_BRANCH"
+
+          # --- 최신화. testtools 와 testcases 를 함께 받는다 ---
+          # 운영 test_shell 이 노드마다 부르는 것과 같은 명령이다.
+          export BRANCH_TESTCASES="$TC_BRANCH"
+          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
+          /entrypoint.sh checkout
+          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
+          echo "최신화 WAN: $(( (rx1 - rx0) / 1048576 )) MB"
+
+          # --- 이 시점의 커밋을 못 박는다 ---
+          # 브랜치는 움직이는 표적이다. plan 이 나눈 목록과 shard 가 가진 케이스가
+          # 어긋나면 조용히 빠진다. shard 는 브랜치가 아니라 이 SHA 로 맞춘다.
+          TC_SHA=$(git -C "$TC_DIR" rev-parse HEAD)
+          echo "tc SHA    : $TC_SHA"
+          echo "tc HEAD   : $(git -C "$TC_DIR" log -1 --format='%ci %s')"
+          {
+            echo "tc_sha=$TC_SHA"
+            echo "tc_branch=$TC_BRANCH"
+          } >> "$GITHUB_OUTPUT"
+
       - name: 케이스 목록 + LPT 분배
         id: split
         env:
@@ -461,10 +556,9 @@ jobs:
         run: |
           set -eo pipefail
 
-          # --- 테스트케이스 overlay. 목록을 만들려면 읽을 수 있어야 한다 ---
-          # 노드 seed(/ro)를 lowerdir 로 쓴다. private 저장소 토큰이 필요 없고 WAN 0 이다.
-          mkdir -p /rw/upper /rw/work "$TC_DIR"
-          mount -t overlay overlay -o lowerdir=/ro,upperdir=/rw/upper,workdir=/rw/work "$TC_DIR"
+          # overlay 마운트와 최신화는 앞 스텝이 끝냈다.
+          # ⚠ _25_unstable 제거는 반드시 checkout **뒤**여야 한다.
+          #    checkout 의 `reset --hard` 가 지운 것을 되살리기 때문이다.
           rm -rf "$TC_DIR/shell/_25_unstable"     # 운영과 같은 제외
 
           # --- 목록. 운영 config.yml 과 같은 glob + 필터다 ---
@@ -598,30 +692,28 @@ jobs:
           echo
           echo "발행: $rundir"
 
-      - name: CTP 를 공유 저장소에 한 번만 받는다
+      - name: CTP 를 공유 저장소에 발행한다
         run: |
           set -eo pipefail
-          # S6a 실측: cubrid-testtools clone 하나가 WAN 25MB 다.
-          # shard 마다 받으면 50 × 25MB = 1.25GB 가 30Mbps 공유 회선을 탄다 (약 5.5분).
-          # plan 이 한 번 받아 GlusterFS 에 두면 shard 는 LAN 으로 복사한다 — WAN 0.
+          # 앞 스텝의 checkout 이 /home/cubrid-testtools 를 이미 받아 두었다.
+          # 그것을 GlusterFS 에 두면 shard 50개가 LAN 으로 복사한다 — shard WAN 0.
+          # ⚠ 노드에 testtools seed 가 없어 plan 의 clone 은 통째로 받는다 (약 25MB).
+          #    노드 seed 로 바꾸는 일은 CUBRIDQA-1497 이다. 그것이 서면 이 스텝은 사라진다.
+          src="$WORKDIR/cubrid-testtools"
+          [ -d "$src/.git" ] || { echo "::error::checkout 이 CTP 를 받지 않았다: $src"; exit 1; }
           seed="$POC_ROOT/testtools"
-          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
+          head=$(git -C "$src" rev-parse HEAD)
 
           tmp="${seed}.tmp.${GITHUB_RUN_ID}"
           rm -rf "$tmp"
-          git -c fetch.parallel=0 clone -q --depth 1 --no-tags \
-            https://github.com/CUBRID/cubrid-testtools.git "$tmp"
-          head=$(git -C "$tmp" rev-parse HEAD)
+          cp -a "$src" "$tmp"
 
           # rename 하나로 공개한다. 소비자가 반쯤 복사된 트리를 보는 일이 없다.
           rm -rf "${seed}.old"
           [ -d "$seed" ] && mv -T "$seed" "${seed}.old"
           mv -T "$tmp" "$seed"
           rm -rf "${seed}.old"
-
-          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
           echo "CTP seed: $seed @ $head"
-          echo "이 clone 의 WAN: $(( (rx1 - rx0) / 1048576 )) MB (shard 는 0 이다)"
 
           printf 'end\t%s\n' "$(date -u +%s)" >> "$STAMPS/plan.tsv"
 
@@ -773,6 +865,59 @@ jobs:
 
           sudo /usr/sbin/sshd || /usr/sbin/sshd || true
 
+      # ---------------------------------------------------------------
+      # 토큰은 job 마다 각자 받는다. job output 으로 넘기지 않는다 —
+      # output 은 job 경계를 그냥 넘고 마스킹되지도 않는다 (함정 8).
+      - name: GitHub App 토큰
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.TC_APP_ID }}
+          private-key: ${{ secrets.TC_APP_PRIVATE_KEY }}
+          repositories: cubrid-testcases-private-ex,cubrid-testtools
+          owner: CUBRID
+
+      - name: 토큰 마스킹
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "::add-mask::$APP_TOKEN"
+
+      - name: 테스트케이스 최신화 — plan 이 본 그 커밋으로 맞춘다
+        env:
+          GHI_TOKEN: ${{ steps.app-token.outputs.token }}
+          TC_BRANCH: ${{ needs.plan.outputs.tc_branch }}
+          WANT_TC_SHA: ${{ needs.plan.outputs.tc_sha }}
+        run: |
+          set -eo pipefail
+          # CTP 복사가 이 스텝보다 **앞**이어야 한다. /home/cubrid-testtools 에 .git 이
+          # 있어야 entrypoint 가 통째로 clone 하지 않고 증분 fetch 로 간다.
+          [ -d "$WORKDIR/cubrid-testtools/.git" ] || {
+            echo "::error::CTP 가 없다. 스텝 순서가 틀렸다"; exit 1; }
+
+          export BRANCH_TESTCASES="$TC_BRANCH"
+          rx0=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
+          /entrypoint.sh checkout
+
+          # --- plan 이 본 커밋으로 못 박는다 ---
+          # checkout 은 브랜치 tip 으로 맞춘다. 그사이 브랜치가 움직였으면
+          # plan 의 목록과 어긋난다. 여기서 되돌린다. 안 움직였으면 fetch 는 no-op 이다.
+          cd "$TC_DIR"
+          git fetch -q --depth 1 --no-tags origin "$WANT_TC_SHA"
+          git reset -q --hard "$WANT_TC_SHA"
+          rx1=$(awk 'NR>2 {n=$1; sub(/:.*/,"",n); if (n!="lo") r+=$2} END {print r+0}' /proc/net/dev)
+
+          got=$(git rev-parse HEAD)
+          echo "tc 브랜치 : $TC_BRANCH"
+          echo "tc SHA    : $got"
+          echo "최신화 WAN: $(( (rx1 - rx0) / 1048576 )) MB"
+          [ "$got" = "$WANT_TC_SHA" ] || {
+            echo "::error::plan 이 본 tc SHA($WANT_TC_SHA)로 못 맞췄다 (지금 $got)"; exit 1; }
+
+          # collect 가 이 파일을 세어 shard 전수가 같은 테스트케이스를 봤는지 판정한다.
+          out="$RUNDIR/results/${IDX}"
+          mkdir -p "$out"
+          printf 'tc_sha=%s\ntc_branch=%s\n' "$got" "$TC_BRANCH" > "$out/tc.read"
+
       - name: 내 몫만 남긴다
         run: |
           set -eo pipefail
@@ -902,7 +1047,8 @@ jobs:
           planned=$(find "$RUNDIR/shards" -maxdepth 1 -name '*.list' 2>/dev/null | wc -l)
           done_n=$(find "$RUNDIR/results" -mindepth 2 -maxdepth 2 -name shard.done 2>/dev/null | wc -l)
           read_n=$(find "$RUNDIR/results" -mindepth 2 -maxdepth 2 -name build.read 2>/dev/null | wc -l)
-          echo "shard: 계획 $planned / 결과 발행 $done_n / 빌드 출처 확인 $read_n"
+          tcread_n=$(find "$RUNDIR/results" -mindepth 2 -maxdepth 2 -name tc.read 2>/dev/null | wc -l)
+          echo "shard: 계획 $planned / 결과 발행 $done_n / 빌드 출처 $read_n / tc 출처 $tcread_n"
 
           # 각 shard 의 상태를 합산한다.
           : > /tmp/agg.tsv
@@ -928,7 +1074,7 @@ jobs:
           skip_sum=$(awk -F'\t' '{s+=$6} END {print s+0}' /tmp/agg.tsv)
           echo "실행 $exec_sum / 성공 $succ_sum / 실패 $fail_sum / 건너뜀 $skip_sum (대상 $TOTAL)"
 
-          for k in planned done_n read_n exec_sum succ_sum fail_sum skip_sum; do
+          for k in planned done_n read_n tcread_n exec_sum succ_sum fail_sum skip_sum; do
             echo "$k=${!k}" >> "$GITHUB_OUTPUT"
           done
 
@@ -937,6 +1083,7 @@ jobs:
         env:
           WANT_BRID: ${{ needs.plan.outputs.build_run_id }}
           MODE: ${{ needs.build_debug.outputs.mode }}
+          WANT_TC_SHA: ${{ needs.plan.outputs.tc_sha }}
         run: |
           set -eo pipefail
           # shard 마다 자기가 마운트한 CUBRID 안에서 읽은 meta 를 남겼다.
@@ -969,10 +1116,33 @@ jobs:
           echo "빌드를 만든 run: $WANT_BRID (이 run: $GITHUB_RUN_ID / mode=$MODE)"
           echo "출처 판정: $reason / 이 run 이 만든 빌드: $this_run"
 
+          # --- 테스트케이스 출처도 같은 방식으로 본다 ---
+          : > /tmp/tcs.txt
+          for f in "$RUNDIR"/results/*/tc.read; do
+            [ -f "$f" ] || continue
+            awk -F= '/^tc_sha=/ {print $2}' "$f" >> /tmp/tcs.txt
+          done
+          tc_uniq=$(sort -u /tmp/tcs.txt | wc -l)
+          echo "shard 가 읽은 테스트케이스 SHA 종류: $tc_uniq"
+          sort /tmp/tcs.txt | uniq -c
+
+          if [ "$tc_uniq" -eq 0 ]; then
+            tc_reason=none
+          elif [ "$tc_uniq" -gt 1 ]; then
+            tc_reason=mixed
+          elif [ "$(sort -u /tmp/tcs.txt)" != "$WANT_TC_SHA" ]; then
+            tc_reason=mismatch
+          else
+            tc_reason=ok
+          fi
+          echo "tc 판정: $tc_reason (plan 이 정한 것: $WANT_TC_SHA)"
+
           {
             echo "reason=$reason"
             echo "uniq=$uniq_n"
             echo "this_run=$this_run"
+            echo "tc_reason=$tc_reason"
+            echo "tc_uniq=$tc_uniq"
           } >> "$GITHUB_OUTPUT"
 
       - name: 실패 케이스 목록 — 출처는 CTP 의 JUnit XML 이다
@@ -1149,6 +1319,11 @@ jobs:
           PROV_REASON: ${{ steps.provenance.outputs.reason }}
           PROV_UNIQ: ${{ steps.provenance.outputs.uniq }}
           PROV_THIS: ${{ steps.provenance.outputs.this_run }}
+          TC_REASON: ${{ steps.provenance.outputs.tc_reason }}
+          TC_UNIQ: ${{ steps.provenance.outputs.tc_uniq }}
+          TCREAD_N: ${{ steps.gather.outputs.tcread_n }}
+          TC_SHA: ${{ needs.plan.outputs.tc_sha }}
+          TC_BRANCH: ${{ needs.plan.outputs.tc_branch }}
           C_QUEUE: ${{ steps.clock.outputs.clock_queue }}
           C_BUILD: ${{ steps.clock.outputs.clock_build }}
           C_PLAN: ${{ steps.clock.outputs.clock_plan }}
@@ -1171,6 +1346,13 @@ jobs:
             *)        v_same="❌ 아무도 출처를 안 남겼다" ;;
           esac
           v_this="✅"; [ "$PROV_THIS" = 'yes' ] || v_this="⚠ 재사용"
+          v_tcread="✅"; [ "$TCREAD_N" -eq "$PLANNED" ] || v_tcread="❌"
+          case "$TC_REASON" in
+            ok)       v_tcsame="✅ 전부 같다" ;;
+            mixed)    v_tcsame="❌ shard 마다 다르다 ($TC_UNIQ 종류)" ;;
+            mismatch) v_tcsame="❌ 전부 같지만 plan 이 정한 것이 아니다" ;;
+            *)        v_tcsame="❌ 아무도 tc 출처를 안 남겼다" ;;
+          esac
 
           {
             echo "## CUBRIDQA-1526 — 빌드 → 발행 → shell suite"
@@ -1199,6 +1381,15 @@ jobs:
             echo "| 전 shard 가 같은 빌드를 읽었나 | $v_same |"
             echo
             echo "출처 확인은 hostPath 가 아니라 **shard 가 실제로 마운트한 overlay** 를 읽어서 한다."
+            echo
+            echo "### 테스트케이스 — 전 shard 가 같은 커밋을 봤나"
+            echo
+            echo "| 항목 | 값 |"
+            echo "|---|---|"
+            echo "| tc 브랜치 | \`$TC_BRANCH\` |"
+            echo "| tc 커밋 | \`$TC_SHA\` |"
+            echo "| tc 출처를 남긴 shard | $TCREAD_N / $PLANNED $v_tcread |"
+            echo "| 전 shard 가 같은 커밋인가 | $v_tcsame |"
             echo
             echo "### AC 3 — 파이프라인 벽시계"
             echo
@@ -1261,6 +1452,23 @@ jobs:
               rc=1 ;;
             *)
               echo "::error::빌드 출처를 남긴 shard 가 하나도 없다"
+              rc=1 ;;
+          esac
+          # --- 테스트케이스 출처 판정 ---
+          if [ "$TCREAD_N" -ne "$PLANNED" ]; then
+            echo "::error::shard $PLANNED 개 중 $TCREAD_N 개만 tc 출처를 남겼다"
+            rc=1
+          fi
+          case "$TC_REASON" in
+            ok) ;;
+            mixed)
+              echo "::error::shard 가 서로 다른 테스트케이스를 봤다 ($TC_UNIQ 종류). 분배 목록과 어긋난다"
+              rc=1 ;;
+            mismatch)
+              echo "::error::전 shard 가 같지만 plan 이 정한 커밋($TC_SHA)이 아니다"
+              rc=1 ;;
+            *)
+              echo "::error::tc 출처를 남긴 shard 가 하나도 없다"
               rc=1 ;;
           esac
           if [ "$FAIL_SUM" -gt 0 ]; then
