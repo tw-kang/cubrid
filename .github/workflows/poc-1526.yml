@@ -602,7 +602,17 @@ jobs:
           fi
           total=$(wc -l < /tmp/cases.list)
           echo "전체 케이스: $(wc -l < /tmp/all.list) / 대상: $total"
-          [ "$total" -gt 0 ] || { echo "::error::케이스가 하나도 없다"; exit 1; }
+          # CUBRIDQA-1522 AC 3 — 대상 0건의 원인을 구별한다.
+          # 재실행에서 0건인 것과 전체 run 에서 glob 이 아무것도 못 찾은 것은
+          # 원인이 다르다. 문구가 같으면 로그가 원인을 잘못 가리킨다.
+          if [ "$total" -eq 0 ]; then
+            if [ -n "$RERUN_FROM" ]; then
+              echo "::error::돌릴 것이 없다 — run $RERUN_FROM 의 실패 목록에 지금 돌릴 수 있는 케이스가 0건이다"
+            else
+              echo "::error::케이스가 하나도 없다 — glob 이 아무것도 못 찾았다. 테스트케이스 트리를 봐라"
+            fi
+            exit 1
+          fi
 
           # --- 소요시간 읽기 ---
           # 형식: <케이스 경로>\t<초>.  없으면 빈 파일로 시작한다.
@@ -1356,6 +1366,7 @@ jobs:
           TCREAD_N: ${{ steps.gather.outputs.tcread_n }}
           TC_SHA: ${{ needs.plan.outputs.tc_sha }}
           TC_BRANCH: ${{ needs.plan.outputs.tc_branch }}
+          RERUN_FROM: ${{ inputs.rerun_from }}   # CUBRIDQA-1522 AC 2 — 요약에 출처를 밝힌다
           C_QUEUE: ${{ steps.clock.outputs.clock_queue }}
           C_BUILD: ${{ steps.clock.outputs.clock_build }}
           C_PLAN: ${{ steps.clock.outputs.clock_plan }}
@@ -1389,6 +1400,14 @@ jobs:
           {
             echo "## CUBRIDQA-1526 — 빌드 → 발행 → shell suite"
             echo
+            # CUBRIDQA-1522 AC 2 — 재실행이면 출처 run 을 맨 위에 밝힌다.
+            # 결과는 runs/<새 run id>/ 로 갈리지만 요약만 보는 사람은 그것을 모른다.
+            if [ -n "$RERUN_FROM" ]; then
+              echo "> ⟳ **run \`$RERUN_FROM\` 의 실패 케이스만 다시 돌린 결과다. 전체 run 이 아니다.**"
+              echo ">"
+              echo "> 원본 run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RERUN_FROM"
+              echo
+            fi
             echo "### AC 1 — 한 run 에서 이어 돈다"
             echo
             echo "| 항목 | 값 |"
