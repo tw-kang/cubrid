@@ -80,12 +80,44 @@ on:
 # shard is 50 privileged pods running testcase code; it holds no token at all.
 permissions: {} # jobs opt-in below
 
-# One group per pull request, so different PRs run in parallel. A global group
-# would cancel someone else's run once anyone can trigger by comment.
-# The dispatch fallback is the SHA, not run_id: two force_build dispatches for one
-# SHA would race the republish and pull the overlay lowerdir from a running shard.
+# One group per request kind, so unrelated requests never cancel each other.
+#
+#   push               gha-ci-push-<sha>             one group per commit: never dropped
+#   pull_request       gha-ci-pr-<N>-build           build only, so superseding is free
+#   workflow_dispatch  gha-ci-dispatch-<inputs.sha>  a same-SHA republish must not race
+#   /run shell | all   gha-ci-pr-<N>-run             repeat requests coalesce
+#   /run rerun <id>    gha-ci-pr-<N>-rerun-<comment> never mixes with the run group
+#   any other comment  gha-ci-<run_id>               alone in its group, cancels nothing
+#
+# That last group is the point: a plain comment starts this workflow too (the gate then
+# ends it), and in one shared group such a comment cancels a running shell suite.
+# push is keyed on the SHA, not the ref, because one group per ref collapses every
+# develop merge into it and the default single-pending rule then drops the middle one.
+# dispatch is keyed on the SHA for the republish reason above.
+# A comment carries no head SHA -- github.sha is the default branch there -- so the PR
+# number is the only key available, and expressions have no regex, so a malformed
+# `/run allx` still lands in the run group.
+# issues and pull requests share one number space, so the comment groups check
+# issue.pull_request the way the gate does: without it, `/run shell` on issue 7
+# would cancel the suite running for pull request 7.
 concurrency:
-  group: gha-ci-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr || inputs.sha || github.ref }}
+  group: >-
+    gha-ci-${{ github.event_name == 'push'
+    && format('push-{0}', github.sha)
+    || github.event_name == 'pull_request'
+    && format('pr-{0}-build', github.event.pull_request.number)
+    || github.event_name == 'workflow_dispatch'
+    && format('dispatch-{0}', inputs.sha)
+    || github.event.issue.pull_request != null
+    && startsWith(github.event.comment.body, '/run')
+    && contains(github.event.comment.body, 'rerun')
+    && format('pr-{0}-rerun-{1}', github.event.issue.number, github.event.comment.id)
+    || github.event.issue.pull_request != null
+    && startsWith(github.event.comment.body, '/run')
+    && (contains(github.event.comment.body, 'shell')
+    || contains(github.event.comment.body, 'all'))
+    && format('pr-{0}-run', github.event.issue.number)
+    || github.run_id }}
   # A develop push publishes the preserved artifact and refreshes the ccache, so the
   # next merge must not cancel it. Everything else supersedes its own predecessor.
   cancel-in-progress: ${{ github.event_name != 'push' }}
