@@ -1,0 +1,348 @@
+# Ticket 32 fork check. gate / status_pending / status are copied verbatim from
+# CUBRID/cubrid#7861; build, plan, shard are dropped and collect is a stub, because
+# this fork has no self-hosted runners. Delete this file when the check is done.
+name: gha-ci-fork-check
+on:
+  # Builds only. A fork PR runs its own copy of this file, so nothing here may
+  # reach a test job -- the repository setting "Require approval for all external
+  # contributors" is what keeps an outsider's PR off these runners.
+  pull_request:
+    types: [opened, synchronize]
+    branches: [develop, 'feature/**']
+  # Which comments wake this is decided by the gate job; it cannot be narrowed here.
+  issue_comment:
+    types: [created, edited]
+  # Post-merge build. Only develop refreshes the ccache.
+  push:
+    branches: [develop, 'feature/**']
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Engine commit to test: full 40-char SHA"
+        required: true
+        type: string
+      force_build:
+        description: "Rebuild even when this SHA is already published"
+        required: false
+        default: false
+        type: boolean
+      parallelism:
+        description: "Shard count, 1..256 (CircleCI test_shell uses 50)"
+        required: false
+        default: "50"
+        type: string
+      limit:
+        description: "Cap on case count; 0 means all of them"
+        required: false
+        default: "0"
+        type: string
+      rerun_from:
+        description: "Re-run only the cases that failed in this run id. Takes precedence over limit"
+        required: false
+        default: ""
+        type: string
+      sabotage:
+        description: "Break the split on purpose to check the guards: none | empty-shard | lose-shard"
+        required: false
+        default: "none"
+        type: string
+      pr:
+        description: "Engine PR number. Testcases come from tc/pr-<number> and results are posted there"
+        required: false
+        default: ""
+        type: string
+
+# shard is 50 privileged pods running testcase code; it holds no token at all.
+permissions: {} # jobs opt-in below
+
+# One group per kind of request, so unrelated ones never cancel each other. Every
+# comment starts this workflow, so a comment that asks for nothing must land alone or
+# it cancels a running suite. push is keyed on the SHA and not the ref: one group per
+# ref holds every develop merge, and with one run pending per group the third merge
+# drops the second. dispatch is keyed on the SHA because two force_build dispatches for
+# one SHA would race the republish and pull the overlay lowerdir from a running shard.
+# The run group is per pull request because a comment carries no head SHA, and it tests
+# issue.pull_request the way the gate does -- issues share the PR number space. A rerun
+# shares that group: both post the same commit status, so two in flight would race it,
+# and CircleCI cannot reach that state -- there a rerun starts from a finished workflow.
+concurrency:
+  group: >-
+    gha-ci-${{ github.event_name == 'push'
+    && format('push-{0}', github.sha)
+    || github.event_name == 'pull_request'
+    && format('pr-{0}-build', github.event.pull_request.number)
+    || github.event_name == 'workflow_dispatch'
+    && format('dispatch-{0}', inputs.sha)
+    || github.event.issue.pull_request != null
+    && startsWith(github.event.comment.body, '/run')
+    && contains(github.event.comment.body, 'rerun')
+    && format('pr-{0}-run', github.event.issue.number)
+    || github.event.issue.pull_request != null
+    && startsWith(github.event.comment.body, '/run')
+    && (contains(github.event.comment.body, 'shell')
+    || contains(github.event.comment.body, 'all'))
+    && format('pr-{0}-run', github.event.issue.number)
+    || github.run_id }}
+  # A develop push publishes the preserved artifact and refreshes the ccache, so the
+  # next merge must not cancel it. Everything else supersedes its own predecessor.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read # the head SHA of the commented PR
+    # Only the comment path needs an author check -- it is the one event anyone with
+    # read access can raise. Same author set as comment_trigger.yml; CONTRIBUTOR is
+    # refused. push and workflow_dispatch already require write access, and
+    # pull_request is gated by the repository's fork-approval setting.
+    if: >-
+      ${{ github.event_name != 'issue_comment'
+      || (github.event.issue.pull_request != null
+      && startsWith(github.event.comment.body, '/run')
+      && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) }}
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+      test: ${{ steps.g.outputs.test }} # only the comment path and dispatch run tests
+      sha: ${{ steps.g.outputs.sha }}
+      pr: ${{ steps.g.outputs.pr }}
+      build_ns: ${{ steps.g.outputs.build_ns }} # develop | pr -- artifacts stay apart
+      cache_write: ${{ steps.g.outputs.cache_write }} # ccache is written on develop only
+      parallelism: ${{ steps.g.outputs.parallelism }}
+      limit: ${{ steps.g.outputs.limit }}
+      force_build: ${{ steps.g.outputs.force_build }}
+      rerun_from: ${{ steps.g.outputs.rerun_from }}
+      sabotage: ${{ steps.g.outputs.sabotage }}
+    steps:
+      - name: Resolve the trigger
+        id: g
+        env:
+          # Inputs arrive through env, never interpolated into the script body.
+          EV: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body }}
+          ISSUE: ${{ github.event.issue.number }}
+          # pull_request: the head SHA, not the merge commit -- that is what the PR
+          # proposes, and it is the same value the comment path resolves to.
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          IN_SHA: ${{ inputs.sha }}
+          IN_PR: ${{ inputs.pr }}
+          IN_PAR: ${{ inputs.parallelism }}
+          IN_LIMIT: ${{ inputs.limit }}
+          IN_FORCE: ${{ inputs.force_build }}
+          IN_RERUN: ${{ inputs.rerun_from }}
+          IN_SAB: ${{ inputs.sabotage }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+          # Knobs no path but workflow_dispatch exposes. plan clamps parallelism when
+          # rerun_from is set, so both rerun paths land on one shard.
+          par=50; limit=0; force=false; rerun=''; sab=none
+          # Builds only, PR namespace, ccache read-only. Each branch below narrows this.
+          test_run=false; pr=''; ns='pr'; cache_write=false
+
+          case "$EV" in
+            pull_request)
+              sha="$PR_HEAD"
+              pr="$PR_NUM"
+              echo "pull_request: PR #${pr} / head ${sha} / build only"
+              ;;
+
+            push)
+              sha="$PUSH_SHA"
+              # develop is the only ref that refreshes the shared ccache and lands in
+              # the preserved namespace. feature/** builds like a PR.
+              if [ "$REF" = 'refs/heads/develop' ]; then
+                ns=develop
+                cache_write=true
+              fi
+              echo "push: ${REF} / ${sha} / build only"
+              ;;
+
+            workflow_dispatch)
+              # A dispatch supplies every value; pass them through.
+              sha="$IN_SHA"; pr="$IN_PR"
+              par="$IN_PAR"; limit="$IN_LIMIT"; force="$IN_FORCE"
+              rerun="$IN_RERUN"; sab="$IN_SAB"
+              test_run=true
+              echo "dispatch: sha=${sha} pr=${pr:-(none)} parallelism=${par}"
+              ;;
+
+            issue_comment)
+              pr="$ISSUE"
+              # Checked before the shared grammar so that regex can stay byte-identical
+              # to comment_trigger.yml. The run id comes from the comment collect posts.
+              if [[ "$BODY" =~ ^/run[[:space:]]+rerun[[:space:]]+([0-9]{1,20})[[:space:]]*$ ]]; then
+                rerun="${BASH_REMATCH[1]}"
+                test_run=true
+                echo "comment: re-run only the failures of run ${rerun}"
+              # Regex must stay identical to comment_trigger.yml: one syntax to learn.
+              elif [[ "$BODY" =~ ^/run([[:space:]]+(all|shell|sql|medium)){1,4}$ ]]; then
+                # Only shell lives here; sql and medium are CircleCI's.
+                if ! [[ "$BODY" =~ (^|[[:space:]])(all|shell)($|[[:space:]]) ]]; then
+                  echo "[info] shell was not requested, ignoring: $BODY"
+                  emit run false
+                  exit 0
+                fi
+                test_run=true
+                echo "comment: PR #${pr} / shell suite"
+              else
+                echo "[info] not /run syntax, ignoring: $BODY"
+                emit run false
+                exit 0
+              fi
+              # Pin the head commit. A branch name is a moving target. The base ref
+              # comes along in the same call: issue_comment takes no branches: filter,
+              # so the base branch range is enforced here or nowhere.
+              pull=$(gh api "repos/${REPO}/pulls/${pr}" --jq '[.head.sha, .base.ref] | @tsv') || {
+                echo "::error::could not read PR ${pr}"; exit 1; }
+              sha=$(printf '%s' "$pull" | cut -f1)
+              base=$(printf '%s' "$pull" | cut -f2)
+              echo "comment: base branch ${base}"
+              # Same range as the pull_request trigger's branches: filter. release/11.x
+              # builds against a different toolchain, so this image cannot test it.
+              case "$base" in
+                develop|feature/*) ;;
+                *)
+                  echo "[info] base branch is out of scope, ignoring: $base"
+                  emit run false
+                  exit 0 ;;
+              esac
+              ;;
+
+            *)
+              echo "::error::unhandled event: $EV"; exit 1 ;;
+          esac
+
+          # Every path ends here, so one check covers all four.
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be 40 lowercase hex characters, got: ${sha}"; exit 1
+          fi
+
+          emit run true
+          emit test "$test_run"
+          emit sha "$sha"
+          emit pr "$pr"
+          emit build_ns "$ns"
+          emit cache_write "$cache_write"
+          emit parallelism "$par"
+          emit limit "$limit"
+          emit force_build "$force"
+          emit rerun_from "$rerun"
+          emit sabotage "$sab"
+          echo "resolved: event=$EV test=$test_run namespace=$ns ccache_write=$cache_write"
+
+  # The check ticket 28 makes required. Posted from here and not from collect: that
+  # job runs in a pod that can be evicted, and statuses: write must not reach a
+  # runner that executes testcase code.
+  status_pending:
+    name: status (pending)
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.test == 'true' && needs.gate.outputs.pr != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark the head commit pending
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          CONTEXT: "gha-ci: test_shell"
+        run: |
+          set -eo pipefail
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be 40 lowercase hex characters, got: ${SHA}"; exit 1
+          fi
+          jq -n --arg c "$CONTEXT" \
+            --arg u "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{state:"pending", context:$c, target_url:$u, description:"shell suite running"}' \
+            > /tmp/st.json
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -d @/tmp/st.json)
+          echo "HTTP $code"
+          if [ "$code" != "201" ]; then
+            echo "::error::could not post the pending status"
+            jq -r '.message // .' /tmp/resp.json 2>/dev/null | head -3
+            exit 1
+          fi
+          echo "pending posted on ${SHA}"
+
+  # Both modes of the CircleCI baseline, which differ only in the build argument and
+  # the ccache they use. One image serves both: the release build here is for testing,
+  # not distribution, so it carries no glibc constraint.
+  #
+  # No job outputs. A matrix job reports the last-completing element's outputs, which
+  # would make `mode` ambiguous; plan derives the path from gate instead and reads the
+  # rest out of build.meta.
+
+  collect:
+    name: collect
+    needs: gate
+    if: ${{ !cancelled() && needs.gate.outputs.run == 'true' && needs.gate.outputs.test == 'true' }}
+    permissions: {}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Stub verdict
+        run: |
+          set -eo pipefail
+          echo "sha gate resolved: ${{ needs.gate.outputs.sha }}"
+          echo "pr: ${{ needs.gate.outputs.pr }}"
+          echo "rerun_from: '${{ needs.gate.outputs.rerun_from }}'"
+          sleep 5
+          exit 0
+  status:
+    name: status
+    needs: [gate, collect]
+    if: ${{ always() && needs.gate.outputs.run == 'true' && needs.gate.outputs.test == 'true' && needs.gate.outputs.pr != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Post the verdict to the head commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          CONTEXT: "gha-ci: test_shell"
+          COLLECT: ${{ needs.collect.result }}
+        run: |
+          set -eo pipefail
+          if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be 40 lowercase hex characters, got: ${SHA}"; exit 1
+          fi
+          case "$COLLECT" in
+            success)   state=success; desc="shell suite passed" ;;
+            cancelled) state=failure; desc="run was superseded or cancelled" ;;
+            *)         state=failure; desc="shell suite failed -- see the run" ;;
+          esac
+          echo "collect=$COLLECT -> $state"
+          jq -n --arg s "$state" --arg c "$CONTEXT" --arg d "$desc" \
+            --arg u "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{state:$s, context:$c, target_url:$u, description:$d}' > /tmp/st.json
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -d @/tmp/st.json)
+          echo "HTTP $code"
+          if [ "$code" != "201" ]; then
+            echo "::error::could not post the verdict status"
+            jq -r '.message // .' /tmp/resp.json 2>/dev/null | head -3
+            exit 1
+          fi
+          echo "posted ${state} on ${SHA}"
