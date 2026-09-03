@@ -302,8 +302,8 @@ jobs:
           echo "sha gate resolved: ${{ needs.gate.outputs.sha }}"
           echo "pr: ${{ needs.gate.outputs.pr }}"
           echo "rerun_from: '${{ needs.gate.outputs.rerun_from }}'"
-          sleep 5
-          exit 1
+          sleep 150
+          exit 0
   status:
     name: status
     needs: [gate, collect]
