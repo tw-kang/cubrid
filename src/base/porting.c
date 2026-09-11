@@ -22,11 +22,6 @@
 
 #ident "$Id$"
 
-/* gha-ci fork bench, ticket 54: a release-only build break. Never merged. */
-#if defined (NDEBUG) && !defined (CUBRID_OPTDEBUG)
-#error "gha-ci fork bench: deliberate release-only build break"
-#endif
-
 #include "config.h"
 
 #include <stdio.h>
