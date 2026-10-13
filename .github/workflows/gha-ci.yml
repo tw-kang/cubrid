@@ -171,7 +171,7 @@ env:
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
   TC_PIN_112: 0d81f8236fef0600e2017bdf1c40cb60b59c7d89
-  SKIP_112: "/_25_unstable/(_06_issues/_20_1h/cbrd_23613_6/[^/]+|_06_issues/_20_1h/cbrd_23613_3|_06_issues/_20_2h/cbrd_23688_3|_36_damson/cbrd_23608_tde/keys_15|_06_issues/_13_1h/bug_bts_10668|_35_cherry/issue_21506_online_index/cbrd_21506_dml_0[123567])/cases/"
+  SKIP_112: "/_25_unstable/(_06_issues/_20_1h/cbrd_23613_6/[^/]+|_06_issues/_20_1h/cbrd_23613_3|_06_issues/_20_2h/cbrd_23688_3|_36_damson/cbrd_23608_tde/keys_15|_06_issues/_13_1h/bug_bts_10668|_35_cherry/issue_21506_online_index/cbrd_21506_dml_0[123567]|_35_cherry/cbrd_22705_online_index_parallel/cbrd_2335[34])/cases/"
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
