@@ -138,7 +138,7 @@ concurrency:
     gha-ci-${{ github.event_name == 'push'
     && format('push-{0}', github.sha)
     || github.event_name == 'workflow_dispatch'
-    && format('dispatch-{0}', inputs.sha)
+    && format('dispatch-{0}-{1}', inputs.sha, github.run_id)
     || github.event.issue.pull_request != null
     && startsWith(github.event.comment.body, '/run')
     && contains(github.event.comment.body, 'rerun')
