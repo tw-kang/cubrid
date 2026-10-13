@@ -169,6 +169,8 @@ env:
   # volume carries only what two nodes must share -- CUBRIDQA-1501 ticket 72.
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
+  # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
+  TC_PIN_112: 0d81f8236fef0600e2017bdf1c40cb60b59c7d89
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -196,8 +198,8 @@ env:
         "verdict_src": "test_status.data",
         "unit": "case", "par_default": "50",
         "runner": "cubrid-arc",
-        "case_glob": "*/cases/*.sh", "case_filter": "/([^/]+)/cases/\\1\\.sh$",
-        "exclude": "_25_unstable", "status_ctx": "gha-ci: test_shell"
+        "case_glob": "*/shell/_25_unstable/*/cases/*.sh", "case_filter": "/([^/]+)/cases/\\1\\.sh$",
+        "exclude": "", "status_ctx": "gha-ci: test_shell"
       },
       "sql": {
         "tc_repo": "cubrid-testcases", "tc_private": "no",
@@ -1271,6 +1273,10 @@ jobs:
               echo "[$suite] tc pin  : $BRANCH_TESTCASES ($TC_BRANCH as of $TC_UNTIL)"
             fi
             # CTP_BRANCH_NAME follows this in the entrypoint, so the CTP logs name it too.
+            if [ "$repo" = cubrid-testcases-private-ex ] && [ -n "$TC_PIN_112" ]; then
+              BRANCH_TESTCASES=$TC_PIN_112
+              echo "[$suite] tc pin  : $BRANCH_TESTCASES (ticket 112)"
+            fi
             export BRANCH_TESTTOOLS="$CTP_BRANCH"
             /entrypoint.sh checkout "$suite"
 
