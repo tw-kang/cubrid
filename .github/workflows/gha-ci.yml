@@ -171,6 +171,7 @@ env:
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
   TC_PIN_112: 0d81f8236fef0600e2017bdf1c40cb60b59c7d89
+  SKIP_112: ""
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -1358,7 +1359,9 @@ jobs:
             # case count each one brings so the guards can still count cases.
             case "$unit" in
               case)
-                list_cases "$suite" "$repo" "$root" > /tmp/all.list
+                # Ticket 112, fork lane only: SKIP_112 (ERE) drops cases from this run.
+                list_cases "$suite" "$repo" "$root" \
+                  | { if [ -n "${SKIP_112:-}" ]; then grep -vE "$SKIP_112" || :; else cat; fi; } > /tmp/all.list
                 ;;
               dir)
                 # The same glob CircleCI splits for sql and medium: the top-level
