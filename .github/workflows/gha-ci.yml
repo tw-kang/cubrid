@@ -170,10 +170,11 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: be8594461976567e914bbff944b5ab93ccaf05fa
+  TC_PIN_112: 28188e9741b64e0ac0283f7a037159cd51297270
   SKIP_112: ""
+  PERF_112: "yes"
   # Ticket 112 validation: only the cases this PR head restores.
-  ONLY_112: "/shell/(_36_damson/cbrd_23608_tde/file_enc_07)/cases/"
+  ONLY_112: "/shell/(_02_sqlx_init/_01_data_buffer_pages/itrack_10002|_01_utility/_15_backupdb/itrack_10003|_05_addition/bug_xdbms_sus733|_39_fig_cake/cbrd_25278_memmon/cbrd_25278_tracking|_06_issues/_15_1h/bug_bts_15156|_04_misc/_02_group_and_async_commit/itrack_10004|_06_issues/_11_1h/bug_bts_5492|_39_fig_cake/cbrd_25278_memmon/cbrd_25278_option|_01_utility/_07_addvoldb/itrack_10001|_06_issues/_24_2h/cbrd_25377|_06_issues/_19_1h/cbrd_22886|_06_issues/_25_1h/cbrd_24741/05_stress_concurrency_none_ha)/cases/"
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -1282,6 +1283,8 @@ jobs:
             fi
             export BRANCH_TESTTOOLS="$CTP_BRANCH"
             /entrypoint.sh checkout "$suite"
+            # Ticket 112, fork lane only: shell_perf mirrors shell/, so its cases run as shell cases
+            if [ "$repo" = cubrid-testcases-private-ex ] && [ -n "$PERF_112" ]; then cp -an "$dir/shell_perf/." "$dir/shell/"; fi
 
             # Pin the commit: if plan's list and the shard's tree drift, cases vanish.
             git -C "$dir" rev-parse HEAD > "/tmp/tc.$repo.sha"
@@ -1955,6 +1958,7 @@ jobs:
           fi
           git fetch -q --depth 1 --no-tags origin "$tc_sha"
           git reset -q --hard "$tc_sha"
+          if [ "$TC_REPO" = cubrid-testcases-private-ex ] && [ -n "$PERF_112" ]; then cp -an shell_perf/. shell/; fi
           got=$(git rev-parse HEAD)
           [ "$got" = "$tc_sha" ] || {
             echo "::error::could not align to the tc SHA plan saw($tc_sha); at $got"; exit 1; }
