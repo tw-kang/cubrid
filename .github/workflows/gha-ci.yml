@@ -170,8 +170,10 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: 0d81f8236fef0600e2017bdf1c40cb60b59c7d89
-  SKIP_112: "/_25_unstable/(_06_issues/_20_1h/cbrd_23613_6/[^/]+|_06_issues/_20_1h/cbrd_23613_3|_06_issues/_20_2h/cbrd_23688_3|_36_damson/cbrd_23608_tde/keys_15|_06_issues/_13_1h/bug_bts_10668|_35_cherry/issue_21506_online_index/cbrd_21506_dml_0[123567]|_35_cherry/cbrd_22705_online_index_parallel/cbrd_2335[34])/cases/"
+  TC_PIN_112: cbbc9966ca4e4302db09926f37cda76c04173480
+  SKIP_112: ""
+  # Ticket 112 validation: only the cases this PR head restores.
+  ONLY_112: "/shell/(_01_utility/_18_unloaddb/itrack_10012|_02_sqlx_init/_01_data_buffer_pages/itrack_10002|_05_addition/bug_xdbms_sus733|_06_issues/_11_2h/bug_bts_6240|_06_issues/_12_1h/bug_bts_6673|_06_issues/_12_1h/bug_bts_7892|_06_issues/_12_2h/bug_bts_5243|_06_issues/_12_2h/bug_bts_8246|_06_issues/_12_2h/bug_bts_8379|_06_issues/_12_2h/bug_bts_8924|_06_issues/_12_2h/bug_bts_9009|_06_issues/_13_1h/bug_bts_10238|_06_issues/_13_1h/bug_bts_10753|_06_issues/_14_1h/bug_bts_12913|_06_issues/_14_2h/bug_bts_15529|_06_issues/_15_1h/bug_bts_14234|_06_issues/_15_2h/bug_bts_16030|_06_issues/_17_1h/cbrd_20659/cubrid_utilities|_06_issues/_17_1h/cbrd_20759/hide_utls_loaddb_password|_06_issues/_17_1h/cbrd_20759/hide_utls_unloaddb_password|_06_issues/_17_2h/bug_bts_14205|_06_issues/_17_2h/cbrd_21657|_06_issues/_19_2h/cbrd_23039|_06_issues/_20_1h/cbrd_21565|_06_issues/_20_1h/cbrd_21879|_06_issues/_22_1h/cbrd_24155|_06_issues/_22_1h/cbrd_24205|_06_issues/_23_1h/apis_949|_06_issues/_23_1h/apis_955|_06_issues/_23_1h/cbrd_24633|_06_issues/_23_1h/cbrd_24642|_06_issues/_23_1h/cbrd_24689|_06_issues/_23_1h/cbrd_24773|_06_issues/_24_1h/cbrd_25369|_06_issues/_26_1h/cbrd_26860|_08_shard/_50_cubridsus/bug_bts_10443|_10_plcsql/bug_fix/cbrd_25953|_10_plcsql/cbrd_25619|_10_plcsql/cbrd_25633|_24_apricot/_08_I18N/_01_euckr/_02_like|_28_features_844/issue_10986_eventlog/_02_eventlog_manyioreads|_28_features_844/issue_9620_restoredb_predict/_04_restoredb_predict_option_l|_32_features_930/issue_12505_show_volume_header/_05_cache|_32_features_930/issue_12643_show_access|_35_cherry/issue_21654_server_side_loaddb/cbrd_23283_not_null|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_14_1h/bug_bts_12913|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_17_1h/cbrd_20759/hide_utls_loaddb_password|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_17_1h/cbrd_20759/hide_utls_unloaddb_password|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_30_banana_qa/issue_5765_timezone_support/02_load_unload/03_rebuild_lib|_35_cherry/issue_22015_QEWC/jdbc_ds|_36_damson/cbrd_23608_tde/log_enc_02|_37_elderberry/cbrd_23842_cdc/bug/cbrd_27008|_37_elderberry/cbrd_23843_dblink/cbrd_23843_3|_37_elderberry/cbrd_23844/cbrd_24330/checksumdb|_37_elderberry/cbrd_24110|_38_fig/cbrd_24404/_02_utility|_38_fig/cbrd_24511|_39_fig_cake/cbrd_24046|_39_fig_cake/cbrd_25230|_39_fig_cake/cbrd_25278_memmon/cbrd_25278_tracking|_39_fig_cake/cbrd_25285|_39_fig_cake/cbrd_25904|_40_guava/cbrd_26354|_06_issues/_11_2h/bug_bts_5616|_06_issues/_12_1h/bug_bts_5933|_01_utility/_15_backupdb/itrack_10003)/cases/"
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -199,8 +201,8 @@ env:
         "verdict_src": "test_status.data",
         "unit": "case", "par_default": "50",
         "runner": "cubrid-arc",
-        "case_glob": "*/shell/_25_unstable/*/cases/*.sh", "case_filter": "/([^/]+)/cases/\\1\\.sh$",
-        "exclude": "", "status_ctx": "gha-ci: test_shell"
+        "case_glob": "*/cases/*.sh", "case_filter": "/([^/]+)/cases/\\1\\.sh$",
+        "exclude": "_25_unstable", "status_ctx": "gha-ci: test_shell"
       },
       "sql": {
         "tc_repo": "cubrid-testcases", "tc_private": "no",
@@ -1361,7 +1363,8 @@ jobs:
               case)
                 # Ticket 112, fork lane only: SKIP_112 (ERE) drops cases from this run.
                 list_cases "$suite" "$repo" "$root" \
-                  | { if [ -n "${SKIP_112:-}" ]; then grep -vE "$SKIP_112" || :; else cat; fi; } > /tmp/all.list
+                  | { if [ -n "${SKIP_112:-}" ]; then grep -vE "$SKIP_112" || :; else cat; fi; } \
+                  | { if [ -n "${ONLY_112:-}" ]; then grep -E "$ONLY_112" || :; else cat; fi; } > /tmp/all.list
                 ;;
               dir)
                 # The same glob CircleCI splits for sql and medium: the top-level
