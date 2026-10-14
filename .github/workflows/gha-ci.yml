@@ -170,7 +170,7 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: 28188e9741b64e0ac0283f7a037159cd51297270
+  TC_PIN_112: 9a491821823a44703922fd99691b2a7c394ad141
   SKIP_112: ""
   PERF_112: "yes"
   # Ticket 112 validation: only the cases this PR head restores.
