@@ -170,10 +170,10 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: 936e2961ed540ea4a7f603d5735a59d96b3eee66
+  TC_PIN_112: be8594461976567e914bbff944b5ab93ccaf05fa
   SKIP_112: ""
   # Ticket 112 validation: only the cases this PR head restores.
-  ONLY_112: "/shell/(_35_cherry/cbrd_22705_online_index_parallel/cbrd_23353|_35_cherry/cbrd_22705_online_index_parallel/cbrd_23354|_35_cherry/issue_21506_online_index/cbrd_21506_dml_01|_35_cherry/issue_21506_online_index/cbrd_21506_dml_02|_35_cherry/issue_21506_online_index/cbrd_21506_dml_03|_35_cherry/issue_21506_online_index/cbrd_21506_dml_05|_35_cherry/issue_21506_online_index/cbrd_21506_dml_06|_35_cherry/issue_21506_online_index/cbrd_21506_dml_07|_06_issues/_25_1h/cbrd_24741/01_basic|_06_issues/_25_1h/cbrd_24741/02_logic_01|_06_issues/_25_1h/cbrd_24741/02_logic_02|_06_issues/_25_1h/cbrd_24741/02_logic_03|_06_issues/_25_1h/cbrd_24741/03_stress_memory|_06_issues/_25_1h/cbrd_24741/04_stress_concurrency_ha|_06_issues/_11_2h/bug_bts_6199|_06_issues/_15_1h/bug_bts_15156|_06_issues/_15_1h/bug_bts_15489|_06_issues/_17_1h/cbrd_20759/hide_cubrid_replay|_06_issues/_18_1h/bug_bts_13845|_06_issues/_18_1h/bug_bts_14305|_35_cherry/issue_22015_QEWC/trigger_1|_35_cherry/issue_22015_QEWC/trigger_2|_37_elderberry/cbrd_23842_cdc/thread|_06_issues/_24_2h/cbrd_25546|_32_features_930/issue_12504_show_log_header/_01_show_log_header/_03_absolute_path/_02_other_log|_01_utility/_15_backupdb/itrack_10004|_06_issues/_12_1h/bug_bts_5596|_06_issues/_12_2h/bug_bts_8199|_06_issues/_12_2h/bug_bts_9601|_06_issues/_13_1h/bug_bts_10053|_06_issues/_14_1h/bug_bts_13474|_06_issues/_14_2h/bug_bts_14982|_06_issues/_14_2h/bug_bts_9484|_06_issues/_17_1h/cbrd_20580|_06_issues/_17_1h/cbrd_20759/hide_broker_log_runner|_06_issues/_17_1h/cbrd_20759/hide_cub_admin_killtran|_06_issues/_17_1h/cbrd_20759/hide_cubrid_killtran|_06_issues/_18_2h/cbrd_22484|_06_issues/_23_1h/cbrd_24533|_06_issues/_25_1h/cbrd_25350/cbrd_25350_ddl|_06_issues/_25_1h/cbrd_25414|_08_shard/_14_shard_access_log|_08_shard/_17_shard_cas_log|_10_plcsql/bug_fix/cbrd_25833|_30_banana_qa/issue_14038_show_threads/_02_extend_02|_35_cherry/issue_21654_server_side_loaddb/cbrd_23297|_35_cherry/issue_21654_server_side_loaddb/cbrd_23372|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_17_1h/cbrd_20759/hide_utls_cub_admin_unloaddb_password|_35_cherry/issue_21654_server_side_loaddb/signals|_36_damson/cbrd_23608_tde/mod_06|_36_damson/cbrd_23629_javasp/cbrd_23629_utility_1|_37_elderberry/cbrd_23841_flashback/cbrd_24175/cbrd_24175_02|_37_elderberry/cbrd_23841_flashback/cbrd_24176/cbrd_24176_01|_37_elderberry/cbrd_23842_cdc/dcl|_38_fig/cbrd_24404/_01_service|_38_fig/cbrd_24436|_39_fig_cake/cbrd_25282/check_option|_39_fig_cake/cbrd_25660|_39_fig_cake/cbrd_25858|_06_issues/_11_1h/bug_bts_5342|_06_issues/_11_2h/bug_bts_5651|_06_issues/_12_1h/bug_bts_6927|_06_issues/_14_1h/bug_bts_11676|_06_issues/_14_1h/bug_bts_13501|_06_issues/_14_2h/bug_bts_15284|_06_issues/_23_1h/cbrd_24756|_37_elderberry/cbrd_23841_flashback/cbrd_23841/tde_test|_36_damson/cbrd_23608_tde/file_enc_05)/cases/"
+  ONLY_112: "/shell/(_36_damson/cbrd_23608_tde/file_enc_07)/cases/"
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -2071,6 +2071,7 @@ jobs:
                     f { n++; if (n <= 200) print; else t[n] = $0
                         if (/<\/failure>/) { flush(); f = 0; delete t } }
                   ' "$real/test-shell.xml" | cut -c1-500; } 2>/dev/null || :
+                ls -l --time-style=+%T /home/CUBRID/log/server 2>/dev/null | sed "s/^/### 112-LOG /" || :
                 ;;
               summary_info)
                 # The SQL runner writes one summary_info per level of the result
