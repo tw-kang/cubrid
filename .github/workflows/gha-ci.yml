@@ -170,10 +170,11 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: be8594461976567e914bbff944b5ab93ccaf05fa
+  TC_PIN_112: 7842a35f46b2504a7549f58b1bbd7e475d190bd2
   SKIP_112: ""
+  MEMMON_112: "60"
   # Ticket 112 validation: only the cases this PR head restores.
-  ONLY_112: "/shell/(_36_damson/cbrd_23608_tde/file_enc_07)/cases/"
+  ONLY_112: "/shell/(_06_issues/_23_1h/cbrd_24773)/cases/"
   BUILD_META: .gha-ci-build.meta
   # Paired with arc_artifact_server_node_port in circleci-k8s-ansible.
   ARTIFACT_URL_BASE: http://192.168.1.48:30080
@@ -2020,6 +2021,32 @@ jobs:
           # Not tmpfs: the unpacked build, inside the pod.
           echo "/build-lower : $(du -sh /build-lower 2>/dev/null | awk '{print $1}')"
 
+      # Ticket 112, fork lane only: does every memmon request grow the server memory?
+      - name: Probe memmon growth (ticket 112)
+        if: ${{ env.MEMMON_112 != '' }}
+        run: |
+          set +e
+          conf=$CUBRID/conf/cubrid.conf
+          cp "$conf" /tmp/cubrid.conf.probe
+          sed -i '/^\[common\]/a enable_memory_monitoring=y' "$conf"
+          mkdir -p /tmp/probe112 && cd /tmp/probe112
+          cubrid createdb --db-volume-size=20M --log-volume-size=20M probe112 en_US > createdb.log 2>&1
+          cubrid server start probe112 > start.log 2>&1 || cat start.log
+          probe() {
+            cubrid memmon probe112 > mm_$1.log 2>&1
+            t=$(grep -oP '(?<=Total Memory Usage: )\d+' mm_$1.log)
+            e=$(awk -F'|' '$1 ~ /error_manager\.c:2899/ {gsub(/[^0-9 ].*/, "", $2); print $2+0}' mm_$1.log)
+            echo "### 112-MEMMON $1 $2 total=$t err2899=$e"
+          }
+          for i in $(seq 1 "$MEMMON_112"); do probe $i fast; done
+          for i in $(seq $((MEMMON_112 + 1)) $((MEMMON_112 + 10))); do sleep 3; probe $i slow; done
+          last=$((MEMMON_112 + 10))
+          awk -F'|' 'FNR == 1 { f++ } $1 ~ /\.(c|cpp|h|hpp):[0-9]+/ { k = $1; gsub(/[[:space:]]/, "", k); v = $2; gsub(/[^0-9 ].*/, "", v); v += 0; if (f == 1) a[k] = v; else b[k] = v }
+            END { for (k in b) if (b[k] != a[k]) print k, a[k] + 0, "->", b[k]; for (k in a) if (!(k in b)) print k, a[k], "-> gone" }' mm_1.log mm_$last.log | sort | sed 's/^/### 112-MEMDIFF /'
+          cubrid server stop probe112 > /dev/null 2>&1
+          cubrid deletedb probe112 > /dev/null 2>&1
+          cp /tmp/cubrid.conf.probe "$conf"
+          cd / && rm -rf /tmp/probe112
       - name: Run CTP
         id: ctp
         env:
