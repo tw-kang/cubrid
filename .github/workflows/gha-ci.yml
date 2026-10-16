@@ -170,7 +170,7 @@ env:
   CTP_SEED: /home/ci/seed/test/cubrid-testtools
   BUILD_SENTINEL: .complete
   # CUBRIDQA-1501 ticket 112 (fork lane only): the private-ex commit every shard runs.
-  TC_PIN_112: 51cf624876dd11606e447f661061a59d91bdef07
+  TC_PIN_112: fe41d25a253e8725ac758ff553787758211e12ef
   SKIP_112: ""
   # Ticket 112 validation: only the cases this PR head restores.
   ONLY_112: "/shell/(_38_fig/cbrd_24501_dblink_dml/cbrd_24501_cubrid|_38_fig/cbrd_24916_check_index_ovfps|_40_guava/cbrd_26111|_06_issues/_12_2h/bug_bts_6479|_06_issues/_12_2h/bug_bts_9337|_06_issues/_13_2h/bug_bts_12286|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_12_2h/bug_bts_6479|_36_damson/cbrd_23629_javasp/cbrd_23629_utility_3|_37_elderberry/cbrd_23842_cdc/api/api27|_38_fig/cbrd_24404/_03_setting|_39_fig_cake/cbrd_25446|_06_issues/_12_2h/bug_bts_8358|_06_issues/_14_2h/bug_bts_11320|_06_issues/_25_1h/cbrd_24462|_38_fig/cbrd_24614|_39_fig_cake/cbrd_25129|_40_guava/cbrd_25977|_06_issues/_11_2h/bug_bts_5974|_06_issues/_12_2h/bug_bts_5316|_06_issues/_12_2h/bug_bts_6479_2|_06_issues/_12_2h/bug_bts_7468|_06_issues/_12_2h/bug_bts_9393|_06_issues/_14_1h/bug_bts_6343|_35_cherry/issue_21654_server_side_loaddb/loaddb_CS/_06_issues/_12_2h/bug_bts_6479_2|_37_elderberry/cbrd_24069|_06_issues/_13_1h/bug_bts_10668)/cases/"
