@@ -17,6 +17,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - develop
+      - 'feature/probe-16'
   schedule:
     - cron: '*/15 * * * *'
 
@@ -208,7 +209,7 @@ jobs:
 
           # A re-run uses the workflow as it was when the run began.
           if ! GH_TOKEN="${GITHUB_TOKEN}" gh api -H 'Accept: application/vnd.github.raw' \
-                 "repos/${ENGINE_REPO}/contents/.github/workflows/tc-merge-gate.yml?ref=develop" \
+                 "repos/${ENGINE_REPO}/contents/.github/workflows/tc-merge-gate.yml?ref=feature/probe-16" \
                | yq -e '.env.JUDGE' > "${RUNNER_TEMP}/judge.sh"; then
             echo "::error::Could not read the judge from develop — re-run this check"
             exit 1
